@@ -523,7 +523,7 @@ def onboard(
         console.print(f"  2. Start gateway: [cyan]{gateway_cmd}[/cyan]")
     else:
         console.print(f"  1. Add your API key to [cyan]{config_path}[/cyan]")
-        console.print("     Get one at: https://openrouter.ai/keys")
+        console.print("     Get one at: https://build.nvidia.com/settings/api-keys")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
     console.print(
         "\n[dim]Want Telegram/WhatsApp? See: https://github.com/tertua/nanobot/blob/master/docs/chat-apps.md[/dim]"
