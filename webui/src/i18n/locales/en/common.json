@@ -73,7 +73,6 @@
       "models": "Models",
       "providers": "Providers",
       "image": "Image",
-      "voice": "Voice",
       "browser": "Web",
       "cliApps": "CLI Apps",
       "mcp": "MCP",
@@ -86,7 +85,6 @@
       "interface": "Interface",
       "ai": "AI",
       "system": "System",
-      "about": "About",
       "status": "Status",
       "localPreferences": "Local preferences",
       "presets": "Presets",
@@ -101,8 +99,7 @@
       "capabilities": "Capabilities",
       "apps": "Apps",
       "nativeHost": "Native host",
-      "hostSafety": "App safety",
-      "voiceInput": "Voice input"
+      "hostSafety": "App safety"
     },
     "models": {
       "selectModel": "Select model",
@@ -164,13 +161,7 @@
       "engine": "Engine",
       "logs": "Logs",
       "diagnostics": "Diagnostics",
-      "contextWindow": "Context window",
-      "transcription": "Transcription",
-      "transcriptionProvider": "Provider",
-      "transcriptionProviderStatus": "Provider status",
-      "transcriptionModel": "Model",
-      "transcriptionLanguage": "Language",
-      "voiceLimits": "Limits"
+      "contextWindow": "Context window"
     },
     "help": {
       "theme": "Switch between light and dark appearance.",
@@ -209,12 +200,7 @@
       "diagnostics": "Export a small runtime report for support.",
       "localServiceAccessNative": "Allow Full Access shell commands to reach services on this Mac.",
       "webuiDefaultAccessNative": "Used by native chats without a project-specific permission.",
-      "contextWindow": "Choose the default context budget for this model configuration.",
-      "transcription": "Transcribe microphone input before sending it. Chat channel voice messages use the same settings.",
-      "transcriptionProvider": "Uses the matching provider credentials from Providers.",
-      "transcriptionProviderStatus": "API keys stay under providers, not in transcription settings.",
-      "transcriptionModel": "Leave as the resolved default unless your provider needs a custom model id.",
-      "transcriptionLanguage": "Optional ISO-639 hint such as en, zh, ja, or ko."
+      "contextWindow": "Choose the default context budget for this model configuration."
     },
     "timezone": {
       "select": "Select timezone",
@@ -251,13 +237,6 @@
       "unsupported": "Unsupported",
       "unavailable": "Unavailable",
       "noDescription": "No description available."
-    },
-    "about": {
-      "version": "Version",
-      "checking": "Checking...",
-      "checkForUpdates": "Check for updates",
-      "upToDate": "You're up to date",
-      "updateAvailable": "Update available v{{version}}"
     },
     "mcp": {
       "allCategories": "All categories",
@@ -412,7 +391,6 @@
       "totalProviders": "{{count}} available",
       "webSearch": "Web search",
       "imageGeneration": "Image generation",
-      "voiceInput": "Voice input",
       "workspace": "Workspace"
     },
     "usage": {
@@ -508,16 +486,10 @@
       "rawInstructions": "Raw SKILL.md",
       "rawInstructionsEmpty": "No raw instructions.",
       "detailDescription": "Details for {{name}}."
-    },
-    "voice": {
-      "selectProvider": "Select provider",
-      "configureProvider": "Configure provider",
-      "languageAuto": "Auto"
     }
   },
   "chat": {
     "fallbackTitle": "Chat {{id}}",
-    "forkTitle": "Fork: {{title}}",
     "loading": "Loading…",
     "noSessions": "No sessions yet.",
     "showMore": "Show {{count}} more",
@@ -559,22 +531,7 @@
     "title": "Delete this chat?",
     "description": "This action cannot be undone.",
     "cancel": "Cancel",
-    "confirm": "Delete",
-    "automationsDescription": "This chat has scheduled automations. Deleting it will also delete them.",
-    "moreAutomations": "+ {{count}} more",
-    "confirmWithAutomations": "Delete chat and automations",
-    "schedule": {
-      "at": "{{time}}",
-      "every": "Every {{duration}}",
-      "cron": "Cron {{expr}}",
-      "cronWithTz": "Cron {{expr}} · {{tz}}",
-      "unknown": "Custom schedule"
-    },
-    "next": {
-      "label": "Next: {{time}}",
-      "disabled": "Paused",
-      "none": "No next run"
-    }
+    "confirm": "Delete"
   },
   "connection": {
     "idle": "Idle",
@@ -671,7 +628,6 @@
       },
       "next": {
         "label": "{{time}}",
-        "pending": "Runs shortly",
         "disabled": "Paused",
         "none": "No next run"
       }
@@ -721,21 +677,6 @@
         "reason": "Reason",
         "deepResearch": "Deep research",
         "voice": "Voice input"
-      },
-      "voice": {
-        "hint": "Click to dictate or hold",
-        "stop": "Stop recording",
-        "transcribing": "Transcribing...",
-        "recordingStatus": "Recording {{time}}"
-      },
-      "voiceErrors": {
-        "unsupported": "Voice input is not supported in this browser.",
-        "permission": "Microphone permission is required.",
-        "notConfigured": "Configure a transcription provider first.",
-        "tooLong": "Recording is too long.",
-        "tooShort": "Hold a little longer to record voice.",
-        "noInput": "No microphone input detected.",
-        "failed": "Could not transcribe audio."
       },
       "slash": {
         "ariaLabel": "Slash commands",
@@ -835,7 +776,6 @@
     },
     "scrollToBottom": "Scroll to bottom",
     "loadEarlier": "Load earlier messages",
-    "forkedFromHistory": "Forked from history",
     "promptNavigator": {
       "open": "Open prompt navigator",
       "title": "Prompts",
@@ -875,9 +815,8 @@
     "imageAttachment": "Image attachment",
     "automationSourceFallback": "Automation",
     "automationTriggered": "Triggered automatically",
-    "forkFromHere": "Fork",
-    "copyReply": "Copy",
-    "copiedReply": "Copied",
+    "copyReply": "Copy reply",
+    "copiedReply": "Copied reply",
     "turnLatencyTitle": "Response time (end-to-end)"
   },
   "lightbox": {

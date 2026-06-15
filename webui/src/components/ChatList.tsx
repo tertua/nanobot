@@ -40,8 +40,6 @@ import type { ChatSummary, SidebarDensity, SidebarSortMode } from "@/lib/types";
 
 const INITIAL_VISIBLE_SESSIONS = 160;
 const VISIBLE_SESSIONS_INCREMENT = 160;
-const ACTION_MENU_CONTENT_CLASS = "w-[8.5rem] min-w-[8.5rem]";
-const ACTION_MENU_ITEM_CLASS = "grid w-[7.75rem] grid-cols-[1rem_minmax(0,1fr)] items-center gap-2";
 
 interface ChatListProps {
   sessions: ChatSummary[];
@@ -311,36 +309,32 @@ export const ChatList = memo(function ChatList({
                             </DropdownMenuTrigger>
                             <DropdownMenuContent
                               align="end"
-                              className={ACTION_MENU_CONTENT_CLASS}
                               portalContainer={actionMenuPortalContainer}
                               onCloseAutoFocus={(event) => event.preventDefault()}
                             >
                               <DropdownMenuItem
                                 onSelect={() => onTogglePin(s.key)}
-                                className={ACTION_MENU_ITEM_CLASS}
                               >
                                 {isPinned ? (
-                                  <PinOff className="h-4 w-4 shrink-0" />
+                                  <PinOff className="mr-2 h-4 w-4" />
                                 ) : (
-                                  <Pin className="h-4 w-4 shrink-0" />
+                                  <Pin className="mr-2 h-4 w-4" />
                                 )}
                                 {isPinned ? t("chat.unpin") : t("chat.pin")}
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onSelect={() => onRequestRename(s.key, title)}
-                                className={ACTION_MENU_ITEM_CLASS}
                               >
-                                <Pencil className="h-4 w-4 shrink-0" />
+                                <Pencil className="mr-2 h-4 w-4" />
                                 {t("chat.rename")}
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onSelect={() => onToggleArchive(s.key)}
-                                className={ACTION_MENU_ITEM_CLASS}
                               >
                                 {isArchived ? (
-                                  <ArchiveRestore className="h-4 w-4 shrink-0" />
+                                  <ArchiveRestore className="mr-2 h-4 w-4" />
                                 ) : (
-                                  <Archive className="h-4 w-4 shrink-0" />
+                                  <Archive className="mr-2 h-4 w-4" />
                                 )}
                                 {isArchived ? t("chat.unarchive") : t("chat.archive")}
                               </DropdownMenuItem>
@@ -348,12 +342,9 @@ export const ChatList = memo(function ChatList({
                                 onSelect={() => {
                                   window.setTimeout(() => onRequestDelete(s.key, title), 0);
                                 }}
-                                className={cn(
-                                  ACTION_MENU_ITEM_CLASS,
-                                  "text-destructive focus:text-destructive",
-                                )}
+                                className="text-destructive focus:text-destructive"
                               >
-                                <Trash2 className="h-4 w-4 shrink-0" />
+                                <Trash2 className="mr-2 h-4 w-4" />
                                 {t("chat.delete")}
                               </DropdownMenuItem>
                             </DropdownMenuContent>
@@ -448,12 +439,11 @@ function ProjectGroupHeader({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            className={ACTION_MENU_CONTENT_CLASS}
             portalContainer={actionMenuPortalContainer}
             onCloseAutoFocus={(event) => event.preventDefault()}
           >
-            <DropdownMenuItem onSelect={onRequestRename} className={ACTION_MENU_ITEM_CLASS}>
-              <Pencil className="h-4 w-4 shrink-0" />
+            <DropdownMenuItem onSelect={onRequestRename}>
+              <Pencil className="mr-2 h-4 w-4" />
               {t("chat.rename")}
             </DropdownMenuItem>
           </DropdownMenuContent>

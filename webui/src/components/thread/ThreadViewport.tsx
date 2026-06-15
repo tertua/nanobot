@@ -37,21 +37,12 @@ interface ThreadViewportProps {
   showScrollToBottomButton?: boolean;
   cliApps?: CliAppInfo[];
   mcpPresets?: McpPresetInfo[];
-  forkBoundaryMessageCount?: number | null;
-  hasMoreBefore?: boolean;
-  loadingOlder?: boolean;
-  userMessageOffset?: number;
-  onLoadOlder?: () => Promise<void> | void;
   onOpenFilePreview?: (path: string) => void;
-  onForkFromMessage?: (beforeUserIndex: number) => void;
 }
 
 const NEAR_BOTTOM_PX = 48;
-const NEAR_TOP_PX = 96;
 const DEFAULT_SCROLL_BUTTON_BOTTOM_PX = 192;
 const SCROLL_BUTTON_COMPOSER_GAP_PX = 16;
-const SOFT_KEYBOARD_MIN_INSET_PX = 80;
-const KEYBOARD_SCROLL_FRAMES = 18;
 export const INITIAL_HISTORY_WINDOW = 160;
 export const HISTORY_WINDOW_INCREMENT = 120;
 
@@ -68,35 +59,6 @@ export function windowMessages(messages: UIMessage[], visibleCount: number): UIM
   return messages.slice(start);
 }
 
-function isKeyboardEditableElement(element: Element | null): element is HTMLElement {
-  if (!(element instanceof HTMLElement)) return false;
-  if (element.isContentEditable) return true;
-  if (element instanceof HTMLTextAreaElement) return true;
-  if (!(element instanceof HTMLInputElement)) return false;
-  return ![
-    "button",
-    "checkbox",
-    "color",
-    "file",
-    "hidden",
-    "image",
-    "radio",
-    "range",
-    "reset",
-    "submit",
-  ].includes(element.type);
-}
-
-function readSoftKeyboardInsetBottom(container: HTMLElement | null): number {
-  const viewport = window.visualViewport;
-  if (!viewport) return 0;
-  const active = document.activeElement;
-  if (!isKeyboardEditableElement(active) || !container?.contains(active)) return 0;
-  const layoutHeight = window.innerHeight || document.documentElement.clientHeight;
-  const inset = layoutHeight - viewport.height - viewport.offsetTop;
-  return inset >= SOFT_KEYBOARD_MIN_INSET_PX ? Math.ceil(inset) : 0;
-}
-
 export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportProps>(function ThreadViewport({
   messages,
   isStreaming,
@@ -107,13 +69,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
   showScrollToBottomButton = true,
   cliApps = [],
   mcpPresets = [],
-  forkBoundaryMessageCount = null,
-  hasMoreBefore = false,
-  loadingOlder = false,
-  userMessageOffset = 0,
-  onLoadOlder,
   onOpenFilePreview,
-  onForkFromMessage,
 }, ref) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -130,7 +86,6 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
   const userReadingHistoryRef = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
   const [composerDockHeight, setComposerDockHeight] = useState(0);
-  const [keyboardInsetBottom, setKeyboardInsetBottom] = useState(0);
   const [visibleMessageCount, setVisibleMessageCount] =
     useState(INITIAL_HISTORY_WINDOW);
   const hasMessages = messages.length > 0;
@@ -139,22 +94,9 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     [messages, visibleMessageCount],
   );
   const hiddenMessageCount = messages.length - visibleMessages.length;
-  const hiddenUserMessageCount =
-    userMessageOffset
-    + (hiddenMessageCount > 0
-      ? messages.slice(0, hiddenMessageCount).filter((message) => message.role === "user").length
-      : 0);
-  const visibleForkBoundaryMessageCount =
-    forkBoundaryMessageCount !== null && forkBoundaryMessageCount > hiddenMessageCount
-      ? forkBoundaryMessageCount - hiddenMessageCount
-      : null;
-  const scrollButtonBottom =
-    keyboardInsetBottom
-    + (composerDockHeight > 0
-      ? composerDockHeight + SCROLL_BUTTON_COMPOSER_GAP_PX
-      : DEFAULT_SCROLL_BUTTON_BOTTOM_PX);
-  const scrollViewportStyle =
-    keyboardInsetBottom > 0 ? { bottom: keyboardInsetBottom } : undefined;
+  const scrollButtonBottom = composerDockHeight > 0
+    ? composerDockHeight + SCROLL_BUTTON_COMPOSER_GAP_PX
+    : DEFAULT_SCROLL_BUTTON_BOTTOM_PX;
 
   const cancelScheduledBottomScroll = useCallback(() => {
     for (const id of scrollFrameIdsRef.current) {
@@ -167,22 +109,11 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     const el = scrollRef.current;
     const marker = bottomRef.current;
     const behavior: ScrollBehavior = smooth ? "smooth" : "auto";
-    if (el) {
-      const top = Math.max(0, el.scrollHeight - el.clientHeight);
-      try {
-        el.scrollTo?.({ top, behavior });
-        if (!smooth) el.scrollTop = top;
-      } catch {
-        try {
-          el.scrollTop = top;
-        } catch {
-          // Test DOMs can expose read-only scrollTop; browsers keep this writable.
-        }
-      }
-    } else if (marker) {
+    if (marker) {
       marker.scrollIntoView({ block: "end", behavior });
+    } else if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior });
     }
-    userReadingHistoryRef.current = false;
     setAtBottom(true);
   }, []);
 
@@ -194,18 +125,14 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
         if (!force && userReadingHistoryRef.current) return;
         scrollToBottomNow(smooth);
       };
-      const scheduleNext = (remainingFrames: number) => {
-        if (remainingFrames <= 0) return;
+      run();
+      for (let i = 1; i < frames; i += 1) {
         const id = window.requestAnimationFrame(() => {
-          scrollFrameIdsRef.current = scrollFrameIdsRef.current.filter((frameId) => frameId !== id);
           if (!force && userReadingHistoryRef.current) return;
           scrollToBottomNow(smooth);
-          scheduleNext(remainingFrames - 1);
         });
         scrollFrameIdsRef.current.push(id);
-      };
-      run();
-      scheduleNext(frames - 1);
+      }
     },
     [cancelScheduledBottomScroll, scrollToBottomNow],
   );
@@ -220,26 +147,10 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     }
     userReadingHistoryRef.current = true;
     setAtBottom(false);
-    if (hiddenMessageCount > 0) {
-      setVisibleMessageCount((count) =>
-        Math.min(messages.length, count + HISTORY_WINDOW_INCREMENT),
-      );
-      return;
-    }
-    if (hasMoreBefore && onLoadOlder && !loadingOlder) {
-      setVisibleMessageCount((count) => count + HISTORY_WINDOW_INCREMENT);
-      void onLoadOlder();
-    }
-  }, [hasMoreBefore, hiddenMessageCount, loadingOlder, messages.length, onLoadOlder]);
-
-  const maybeLoadEarlierFromScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el || !hasMessages || pendingConversationScrollRef.current) return;
-    if (!userReadingHistoryRef.current) return;
-    if (el.scrollTop > NEAR_TOP_PX) return;
-    if (hiddenMessageCount <= 0 && !hasMoreBefore) return;
-    loadEarlierMessages();
-  }, [hasMessages, hasMoreBefore, hiddenMessageCount, loadEarlierMessages]);
+    setVisibleMessageCount((count) =>
+      Math.min(messages.length, count + HISTORY_WINDOW_INCREMENT),
+    );
+  }, [messages.length]);
 
   const jumpToUserPrompt = useCallback((promptId: string) => {
     const scrollEl = scrollRef.current;
@@ -266,68 +177,12 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     );
   }, []);
 
-  useLayoutEffect(() => {
-    const updateKeyboardInset = () => {
-      const scrollEl = scrollRef.current;
-      const next = readSoftKeyboardInsetBottom(scrollEl);
-      const active = document.activeElement;
-      const composerFocused =
-        hasMessages && isKeyboardEditableElement(active) && Boolean(scrollEl?.contains(active));
-      setKeyboardInsetBottom((current) =>
-        Math.abs(current - next) < 1 ? current : next,
-      );
-      if (composerFocused) {
-        userReadingHistoryRef.current = false;
-        scrollToBottom(false, KEYBOARD_SCROLL_FRAMES, { force: true });
-      }
-    };
-    updateKeyboardInset();
-    const viewport = window.visualViewport;
-    viewport?.addEventListener("resize", updateKeyboardInset);
-    viewport?.addEventListener("scroll", updateKeyboardInset);
-    window.addEventListener("resize", updateKeyboardInset);
-    document.addEventListener("focusin", updateKeyboardInset);
-    document.addEventListener("focusout", updateKeyboardInset);
-    return () => {
-      viewport?.removeEventListener("resize", updateKeyboardInset);
-      viewport?.removeEventListener("scroll", updateKeyboardInset);
-      window.removeEventListener("resize", updateKeyboardInset);
-      document.removeEventListener("focusin", updateKeyboardInset);
-      document.removeEventListener("focusout", updateKeyboardInset);
-    };
-  }, [hasMessages, scrollToBottom]);
-
   useEffect(() => {
     if (!atBottom) return;
     // Instant jump: CSS scroll-smooth + behavior "auto" still animates in some
     // browsers; session switches and history hydration should never slide from top.
     scrollToBottom(false);
   }, [messages, atBottom, scrollToBottom]);
-
-  useLayoutEffect(() => {
-    if (keyboardInsetBottom > 0) {
-      userReadingHistoryRef.current = false;
-      scrollToBottom(false, KEYBOARD_SCROLL_FRAMES, { force: true });
-      return;
-    }
-    if (userReadingHistoryRef.current) return;
-    scrollToBottom(false, 4);
-  }, [keyboardInsetBottom, scrollToBottom]);
-
-  useEffect(() => {
-    const scrollEl = scrollRef.current;
-    if (!scrollEl) return;
-
-    const onComposerFocus = () => {
-      const active = document.activeElement;
-      if (!hasMessages || !isKeyboardEditableElement(active) || !scrollEl.contains(active)) return;
-      userReadingHistoryRef.current = false;
-      scrollToBottom(false, KEYBOARD_SCROLL_FRAMES, { force: true });
-    };
-
-    document.addEventListener("focusin", onComposerFocus);
-    return () => document.removeEventListener("focusin", onComposerFocus);
-  }, [hasMessages, scrollToBottom]);
 
   useEffect(() => {
     if (scrollToBottomSignal <= 0) return;
@@ -351,17 +206,8 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     restoreScrollAfterPrependRef.current = null;
     if (!el) return;
     const delta = el.scrollHeight - pending.height;
-    const nextTop = pending.top + delta;
-    try {
-      el.scrollTop = nextTop;
-    } catch {
-      try {
-        el.scrollTo?.({ top: nextTop, behavior: "auto" });
-      } catch {
-        // Test DOMs can expose read-only scrollTop; browsers keep this writable.
-      }
-    }
-  }, [visibleMessages.length, messages.length]);
+    el.scrollTop = pending.top + delta;
+  }, [visibleMessages.length]);
 
   useLayoutEffect(() => {
     const promptId = pendingPromptJumpRef.current;
@@ -413,19 +259,17 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     const el = scrollRef.current;
     if (!el) return;
 
-    const onScroll = (allowHistoryLoad = true) => {
+    const onScroll = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       const near = distance < NEAR_BOTTOM_PX;
       setAtBottom(near);
       userReadingHistoryRef.current = !near;
-      if (allowHistoryLoad && !near) maybeLoadEarlierFromScroll();
     };
 
-    onScroll(false);
-    const handleScroll = () => onScroll(true);
-    el.addEventListener("scroll", handleScroll, { passive: true });
-    return () => el.removeEventListener("scroll", handleScroll);
-  }, [maybeLoadEarlierFromScroll]);
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -438,24 +282,19 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
           "[&::-webkit-scrollbar-thumb]:bg-muted-foreground/30",
           "[&::-webkit-scrollbar-track]:bg-transparent",
         )}
-        style={scrollViewportStyle}
       >
         {hasMessages ? (
           <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[64rem] flex-col">
-            <div
-              data-testid="thread-message-region"
-              className="flex min-h-0 flex-1 flex-col justify-end px-3 pb-4 pt-4 sm:px-4"
-            >
+            <div className="flex-1 px-4 pb-20 pt-4">
               <div className="mx-auto w-full max-w-[49.5rem]">
                 <ThreadMessages
                   messages={visibleMessages}
                   isStreaming={isStreaming}
-                  hiddenUserMessageCount={hiddenUserMessageCount}
+                  hiddenMessageCount={hiddenMessageCount}
+                  onLoadEarlier={loadEarlierMessages}
                   cliApps={cliApps}
                   mcpPresets={mcpPresets}
-                  forkBoundaryMessageCount={visibleForkBoundaryMessageCount}
                   onOpenFilePreview={onOpenFilePreview}
-                  onForkFromMessage={onForkFromMessage}
                 />
               </div>
             </div>
@@ -465,16 +304,16 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
               data-testid="thread-composer-dock"
               className="sticky bottom-0 z-10 mt-auto bg-background"
             >
-              <div className="px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
+              <div className="px-4 pb-3">
                 {composer}
               </div>
             </div>
           </div>
         ) : (
-          <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[72rem] flex-col px-3 sm:px-4">
-            <div className="flex w-full flex-1 items-center justify-center py-6 sm:py-12">
-              <div className="relative flex w-full max-w-[58rem] flex-col items-center gap-5 sm:block">
-                <div className="flex justify-center sm:absolute sm:inset-x-0 sm:bottom-[calc(100%+1.5rem)]">
+          <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[72rem] flex-col px-4">
+            <div className="flex w-full flex-1 items-center justify-center py-10 sm:py-12">
+              <div className="relative w-full max-w-[58rem]">
+                <div className="absolute inset-x-0 bottom-[calc(100%+1.5rem)] flex justify-center">
                   {emptyState}
                 </div>
                 <div className="w-full">{composer}</div>

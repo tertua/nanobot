@@ -73,7 +73,6 @@
       "models": "Model",
       "providers": "Penyedia",
       "image": "Gambar",
-      "voice": "Suara",
       "browser": "Internet",
       "runtime": "Sistem",
       "advanced": "Keamanan",
@@ -86,7 +85,6 @@
       "interface": "Antarmuka",
       "ai": "AI",
       "system": "Sistem",
-      "about": "Tentang",
       "status": "Status",
       "localPreferences": "Preferensi lokal",
       "presets": "Preset",
@@ -101,8 +99,7 @@
       "mcp": "Layanan MCP",
       "apps": "Aplikasi",
       "nativeHost": "Host native",
-      "hostSafety": "Keamanan aplikasi",
-      "voiceInput": "Input suara"
+      "hostSafety": "Keamanan aplikasi"
     },
     "rows": {
       "theme": "Tema",
@@ -145,13 +142,7 @@
       "engine": "Mesin",
       "logs": "Log",
       "diagnostics": "Diagnostik",
-      "contextWindow": "Jendela konteks",
-      "transcription": "Transkripsi",
-      "transcriptionProvider": "Penyedia",
-      "transcriptionProviderStatus": "Status penyedia",
-      "transcriptionModel": "Model",
-      "transcriptionLanguage": "Bahasa",
-      "voiceLimits": "Batas"
+      "contextWindow": "Jendela konteks"
     },
     "help": {
       "theme": "Beralih antara tampilan terang dan gelap.",
@@ -190,12 +181,7 @@
       "diagnostics": "Exporta un pequeño informe de runtime para soporte.",
       "localServiceAccessNative": "Permite que comandos shell con Full Access alcancen servicios en este Mac.",
       "webuiDefaultAccessNative": "Usado por chats nativos sin permiso específico de proyecto.",
-      "contextWindow": "Pilih anggaran konteks default untuk konfigurasi model ini.",
-      "transcription": "Transkripsikan input mikrofon sebelum dikirim. Pesan suara channel memakai pengaturan yang sama.",
-      "transcriptionProvider": "Menggunakan kredensial penyedia yang sesuai dari Providers.",
-      "transcriptionProviderStatus": "API key tetap berada di providers, bukan di pengaturan transkripsi.",
-      "transcriptionModel": "Biarkan memakai default yang teresolusi kecuali penyedia membutuhkan id model khusus.",
-      "transcriptionLanguage": "Petunjuk ISO-639 opsional, seperti en, zh, ja, atau ko."
+      "contextWindow": "Pilih anggaran konteks default untuk konfigurasi model ini."
     },
     "values": {
       "light": "Terang",
@@ -297,7 +283,6 @@
       "totalProviders": "{{count}} tersedia",
       "webSearch": "Pencarian web",
       "imageGeneration": "Pembuatan gambar",
-      "voiceInput": "Input suara",
       "workspace": "Ruang kerja"
     },
     "usage": {
@@ -391,13 +376,6 @@
       "install": "Pasang CLI",
       "unavailable": "Tidak tersedia",
       "noDescription": "Tidak ada deskripsi."
-    },
-    "about": {
-      "version": "Versi",
-      "checking": "Memeriksa pembaruan...",
-      "checkForUpdates": "Periksa pembaruan",
-      "upToDate": "Anda sudah menggunakan versi terbaru",
-      "updateAvailable": "Pembaruan tersedia v{{version}}"
     },
     "mcp": {
       "allCategories": "Semua kategori",
@@ -508,16 +486,10 @@
       "rawInstructions": "SKILL.md mentah",
       "rawInstructionsEmpty": "Tidak ada instruksi mentah.",
       "detailDescription": "Detail untuk {{name}}."
-    },
-    "voice": {
-      "selectProvider": "Pilih penyedia",
-      "configureProvider": "Konfigurasi penyedia",
-      "languageAuto": "Auto"
     }
   },
   "chat": {
     "fallbackTitle": "Obrolan {{id}}",
-    "forkTitle": "Cabang: {{title}}",
     "loading": "Memuat…",
     "noSessions": "Belum ada sesi.",
     "showMore": "Tampilkan {{count}} lagi",
@@ -559,22 +531,7 @@
     "title": "Hapus obrolan ini?",
     "description": "Tindakan ini tidak dapat dibatalkan.",
     "cancel": "Batal",
-    "confirm": "Hapus",
-    "automationsDescription": "Obrolan ini memiliki automasi terjadwal. Menghapusnya juga akan menghapus automasi tersebut.",
-    "moreAutomations": "+ {{count}} lagi",
-    "confirmWithAutomations": "Hapus obrolan dan automasi",
-    "schedule": {
-      "at": "{{time}}",
-      "every": "Setiap {{duration}}",
-      "cron": "Cron {{expr}}",
-      "cronWithTz": "Cron {{expr}} · {{tz}}",
-      "unknown": "Jadwal khusus"
-    },
-    "next": {
-      "label": "Berikutnya: {{time}}",
-      "disabled": "Dijeda",
-      "none": "Tidak ada jadwal berikutnya"
-    }
+    "confirm": "Hapus"
   },
   "connection": {
     "idle": "Idle",
@@ -671,7 +628,6 @@
       },
       "next": {
         "label": "Berikutnya {{time}}",
-        "pending": "Segera berjalan",
         "disabled": "Dijeda",
         "none": "Tidak ada jadwal berikutnya"
       }
@@ -721,21 +677,6 @@
         "reason": "Bernalar",
         "deepResearch": "Riset mendalam",
         "voice": "Input suara"
-      },
-      "voice": {
-        "hint": "Klik untuk mendikte atau tahan",
-        "stop": "Hentikan rekaman",
-        "transcribing": "Mentranskripsi...",
-        "recordingStatus": "Merekam {{time}}"
-      },
-      "voiceErrors": {
-        "unsupported": "Input suara tidak didukung di browser ini.",
-        "permission": "Izin mikrofon diperlukan.",
-        "notConfigured": "Konfigurasikan penyedia transkripsi terlebih dahulu.",
-        "tooLong": "Rekaman terlalu panjang.",
-        "tooShort": "Tahan sedikit lebih lama untuk merekam suara.",
-        "noInput": "Tidak ada input mikrofon yang terdeteksi.",
-        "failed": "Tidak dapat mentranskripsi audio."
       },
       "slash": {
         "ariaLabel": "Perintah slash",
@@ -835,7 +776,6 @@
     },
     "scrollToBottom": "Gulir ke bawah",
     "loadEarlier": "Muat pesan sebelumnya",
-    "forkedFromHistory": "Fork dari riwayat",
     "promptNavigator": {
       "open": "Buka navigator prompt",
       "title": "Prompt",
@@ -861,9 +801,8 @@
     "agentActivityLiveSummary": "Berjalan… · {{reasoning}} langkah · {{tools}} panggilan alat",
     "agentActivityLiveToolsOnly": "Berjalan… · {{tools}} panggilan alat",
     "imageAttachment": "Lampiran gambar",
-    "forkFromHere": "Fork",
-    "copyReply": "Salin",
-    "copiedReply": "Disalin",
+    "copyReply": "Salin balasan",
+    "copiedReply": "Balasan disalin",
     "turnLatencyTitle": "Waktu respons (ujung ke ujung)",
     "activityThinkingFor": "Berpikir selama {{duration}}",
     "activityThought": "Selesai berpikir",
