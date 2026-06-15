@@ -352,7 +352,7 @@ class WebSocketChannel(BaseChannel):
         """Send a control event (attached, error, ...) to a single connection."""
         payload: dict[str, Any] = {"event": event}
         payload.update(fields)
-        raw = json.dumps(payload, ensure_ascii=False)
+        raw = json.dumps(payload, ensure_ascii=True)
         try:
             await connection.send(raw)
         except ConnectionClosed:
@@ -529,7 +529,7 @@ class WebSocketChannel(BaseChannel):
                         "chat_id": default_chat_id,
                         "client_id": client_id,
                     },
-                    ensure_ascii=False,
+                    ensure_ascii=True,
                 )
             )
             # Register only after ready is successfully sent to avoid out-of-order sends
@@ -955,7 +955,7 @@ class WebSocketChannel(BaseChannel):
             include_source=True,
             transcript_overrides={"text": text},
         )
-        raw = json.dumps(payload, ensure_ascii=False)
+        raw = json.dumps(payload, ensure_ascii=True)
         if not conns:
             return
         for connection in conns:
@@ -990,7 +990,7 @@ class WebSocketChannel(BaseChannel):
             metadata=meta,
             phase="reasoning",
         )
-        raw = json.dumps(body, ensure_ascii=False)
+        raw = json.dumps(body, ensure_ascii=True)
         if not conns:
             return
         for connection in conns:
@@ -1017,7 +1017,7 @@ class WebSocketChannel(BaseChannel):
             metadata=meta,
             phase="reasoning",
         )
-        raw = json.dumps(body, ensure_ascii=False)
+        raw = json.dumps(body, ensure_ascii=True)
         if not conns:
             return
         for connection in conns:
@@ -1041,7 +1041,7 @@ class WebSocketChannel(BaseChannel):
             metadata=metadata,
             phase="activity",
         )
-        raw = json.dumps(payload, ensure_ascii=False)
+        raw = json.dumps(payload, ensure_ascii=True)
         if not conns:
             return
         for connection in conns:
@@ -1080,7 +1080,7 @@ class WebSocketChannel(BaseChannel):
             metadata=meta,
             phase="answer",
         )
-        raw = json.dumps(body, ensure_ascii=False)
+        raw = json.dumps(body, ensure_ascii=True)
         if not conns:
             return
         for connection in conns:
@@ -1107,7 +1107,7 @@ class WebSocketChannel(BaseChannel):
             metadata=metadata,
             phase="complete",
         )
-        raw = json.dumps(body, ensure_ascii=False)
+        raw = json.dumps(body, ensure_ascii=True)
         if not conns:
             return
         for connection in conns:
@@ -1119,7 +1119,7 @@ class WebSocketChannel(BaseChannel):
         if not conns:
             return
         body = {"event": "goal_state", "chat_id": chat_id, "goal_state": blob}
-        raw = json.dumps(body, ensure_ascii=False)
+        raw = json.dumps(body, ensure_ascii=True)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" goal_state ")
 
@@ -1141,7 +1141,7 @@ class WebSocketChannel(BaseChannel):
         }
         if status == "running" and started_at is not None:
             body["started_at"] = started_at
-        raw = json.dumps(body, ensure_ascii=False)
+        raw = json.dumps(body, ensure_ascii=True)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" goal_status ")
 
@@ -1153,7 +1153,7 @@ class WebSocketChannel(BaseChannel):
         body: dict[str, Any] = {"event": "session_updated", "chat_id": chat_id}
         if scope:
             body["scope"] = scope
-        raw = json.dumps(body, ensure_ascii=False)
+        raw = json.dumps(body, ensure_ascii=True)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" session_updated ")
 
@@ -1173,6 +1173,6 @@ class WebSocketChannel(BaseChannel):
         }
         if isinstance(model_preset, str) and model_preset.strip():
             body["model_preset"] = model_preset.strip()
-        raw = json.dumps(body, ensure_ascii=False)
+        raw = json.dumps(body, ensure_ascii=True)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" runtime_model_updated ")
