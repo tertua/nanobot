@@ -124,13 +124,13 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     # (built-in fields seperti send_progress tetap dipertahankan)
     if "channels" in data:
         _known_channel_fields = {
-            "send_progress",
-            "send_tool_hints",
-            "show_reasoning",
-            "extract_document_text",
-            "send_max_retries",
-            "transcription_provider",
-            "transcription_language",
+            "sendProgress",
+            "sendToolHints",
+            "showReasoning",
+            "extractDocumentText",
+            "sendMaxRetries",
+            "transcriptionProvider",
+            "transcriptionLanguage",
         }
         data["channels"] = {
             k: v for k, v in data["channels"].items()
