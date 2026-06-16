@@ -1,2 +1,3 @@
-# Ensure shell scripts always use LF line endings (Docker/Linux compat)
-*.sh text eol=lf
+# Keep docs/ on master branch immune from upstream (main) merges.
+# This prevents old upstream docs from re-appearing after merge from HKUDS/main.
+docs/** merge=ours
