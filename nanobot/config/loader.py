@@ -67,6 +67,24 @@ def _apply_ssrf_whitelist(config: Config) -> None:
     configure_ssrf_whitelist(config.tools.ssrf_whitelist)
 
 
+_PROVIDER_WHITELIST: set[str] = {
+    "openai",
+    "custom",
+    "anthropic",
+    "openrouter",
+    "aihubmix",
+    "gemini",
+    "nvidia",
+}
+"""Provider keys that appear in generated config.json.
+
+Add or remove provider names here to control which providers
+are included when save_config() writes the config file.
+Providers not in this set are omitted from the output.
+See nanobot/config/schema.py ProvidersConfig for the full list.
+"""
+
+
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """
     Save configuration to file.
@@ -79,6 +97,13 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = config.model_dump(mode="json", by_alias=True)
+
+    # Filter providers: hanya yang ada di whitelist yang ikut tercetak
+    if "providers" in data:
+        data["providers"] = {
+            k: v for k, v in data["providers"].items()
+            if k in _PROVIDER_WHITELIST
+        }
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
