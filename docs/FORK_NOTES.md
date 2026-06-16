@@ -93,9 +93,9 @@ Fork ini menerapkan **whitelist** pada `config.json` yang di-generate via `save_
 
 **Provider whitelist** (`_PROVIDER_WHITELIST`):
 ```python
-{"openai", "custom", "anthropic", "deepseek", "aihubmix", "gemini", "nvidia", "ollama"}
+{"openai", "custom", "anthropic", "openrouter", "aihubmix", "gemini", "nvidia"}
 ```
-Provider lain (e.g. `azure_openai`, `bedrock`, `github_copilot`, `openai_codex`, dll.) tidak akan muncul di `config.json`.
+Provider lain (e.g. `deepseek`, `ollama`, `azure_openai`, `bedrock`, `github_copilot`, `openai_codex`, dll.) tidak akan muncul di `config.json`.
 
 **Channel whitelist** (`_CHANNEL_WHITELIST`):
 ```python
