@@ -543,16 +543,16 @@ def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
 
 def _onboard_plugins(config_path: Path) -> None:
     """Inject default config for all discovered channels (built-in + plugins)."""
-    import json
-
     from nanobot.channels.registry import discover_all
+    from nanobot.config.loader import load_config, save_config
+    from nanobot.config.schema import Config
 
     all_channels = discover_all()
     if not all_channels:
         return
 
-    with open(config_path, encoding="utf-8") as f:
-        data = json.load(f)
+    config = load_config(config_path)
+    data = config.model_dump(mode="json", by_alias=True)
 
     channels = data.setdefault("channels", {})
     for name, cls in all_channels.items():
@@ -561,8 +561,10 @@ def _onboard_plugins(config_path: Path) -> None:
         else:
             channels[name] = _merge_missing_defaults(channels[name], cls.default_config())
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    # Re-parse agar melalui validator, lalu save via save_config()
+    # sehingga _CHANNEL_WHITELIST di loader.py tetap diterapkan
+    config = Config.model_validate(data)
+    save_config(config, config_path)
 
 
 def _model_display(config: Config) -> tuple[str, str]:
