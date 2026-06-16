@@ -46,6 +46,7 @@ class ProviderSpec:
     detect_by_key_prefix: str = ""  # match api_key prefix, e.g. "sk-or-"
     detect_by_base_keyword: str = ""  # match substring in api_base URL
     default_api_base: str = ""  # OpenAI-compatible base URL for this provider
+    default_extra_headers: dict[str, str] | None = None  # default headers when config has none
 
     # gateway behavior
     strip_model_prefix: bool = False  # strip "provider/" before sending to gateway
@@ -189,6 +190,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         detect_by_base_keyword="aihubmix",
         default_api_base="https://aihubmix.com/v1",
+        default_extra_headers={"APP-Code": "GGFZ8676"},
         strip_model_prefix=True,
     ),
     # SiliconFlow (硅基流动): OpenAI-compatible gateway, model names keep org prefix

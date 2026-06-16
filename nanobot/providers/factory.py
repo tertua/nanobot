@@ -109,7 +109,7 @@ def _make_provider_core(
             api_key=p.api_key if p else None,
             api_base=config.get_api_base(model, preset=resolved),
             default_model=model,
-            extra_headers=p.extra_headers if p else None,
+            extra_headers=p.extra_headers if (p and p.extra_headers) else (spec.default_extra_headers if spec else None),
             spec=spec,
             extra_body=p.extra_body if p else None,
             api_type=p.api_type if p and provider_name == "openai" else "auto",
