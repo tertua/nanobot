@@ -587,9 +587,9 @@ class SessionManager:
                     "metadata": session.metadata,
                     "last_consolidated": session.last_consolidated
                 }
-                f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
+                f.write(json.dumps(metadata_line, ensure_ascii=True) + "\n")
                 for msg in session.messages:
-                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                    f.write(json.dumps(msg, ensure_ascii=True) + "\n")
                 if fsync:
                     f.flush()
                     os.fsync(f.fileno())

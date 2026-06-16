@@ -284,7 +284,7 @@ class MemoryStore:
             if session_key:
                 record["session_key"] = session_key
             with open(self.history_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                f.write(json.dumps(record, ensure_ascii=True) + "\n")
             self._cursor_file.write_text(str(cursor), encoding="utf-8")
         return cursor
 
@@ -434,7 +434,7 @@ class MemoryStore:
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 for entry in entries:
-                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                    f.write(json.dumps(entry, ensure_ascii=True) + "\n")
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_path, self.history_file)
