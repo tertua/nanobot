@@ -86,9 +86,10 @@ See nanobot/config/schema.py ProvidersConfig for the full list.
 
 _CHANNEL_WHITELIST: set[str] = {
     "telegram",
-    "discord",
+    "whatsapp",
     "websocket",
-    "slack",
+    "email",
+    "cli",
 }
 """Channel keys that appear in generated config.json.
 
