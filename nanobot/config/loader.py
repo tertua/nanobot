@@ -84,6 +84,20 @@ Providers not in this set are omitted from the output.
 See nanobot/config/schema.py ProvidersConfig for the full list.
 """
 
+_CHANNEL_WHITELIST: set[str] = {
+    "telegram",
+    "discord",
+    "websocket",
+    "slack",
+}
+"""Channel keys that appear in generated config.json.
+
+Add or remove channel names here to control which channel configs
+are included when save_config() writes the config file.
+Built-in fields (send_progress, send_tool_hints, etc.) are always kept.
+Channels not in this set are omitted from the output.
+"""
+
 
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """
@@ -103,6 +117,23 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         data["providers"] = {
             k: v for k, v in data["providers"].items()
             if k in _PROVIDER_WHITELIST
+        }
+
+    # Filter channels: hanya yang ada di whitelist yang ikut tercetak
+    # (built-in fields seperti send_progress tetap dipertahankan)
+    if "channels" in data:
+        _known_channel_fields = {
+            "send_progress",
+            "send_tool_hints",
+            "show_reasoning",
+            "extract_document_text",
+            "send_max_retries",
+            "transcription_provider",
+            "transcription_language",
+        }
+        data["channels"] = {
+            k: v for k, v in data["channels"].items()
+            if k in _known_channel_fields or k in _CHANNEL_WHITELIST
         }
 
     with open(path, "w", encoding="utf-8") as f:
