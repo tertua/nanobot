@@ -84,7 +84,31 @@ Ini adalah **fork Windows portable** dari nanobot. Fork ini mengambil core funct
 ### 3.4 WebSocket Channel
 - `nanobot/channels/websocket.py` — Modifikasi untuk WebUI integration
 
-### 3.5 README
+### 3.5 Config Whitelist (Provider & Channel)
+Fork ini menerapkan **whitelist** pada `config.json` yang di-generate via `save_config()`:
+
+**File terkait:**
+- `nanobot/config/loader.py` — `_PROVIDER_WHITELIST` & `_CHANNEL_WHITELIST`
+- `nanobot/cli/commands.py` — `_onboard_plugins()` diubah supaya pakai `save_config()`
+
+**Provider whitelist** (`_PROVIDER_WHITELIST`):
+```python
+{"openai", "custom", "anthropic", "deepseek", "aihubmix", "gemini", "nvidia", "ollama"}
+```
+Provider lain (e.g. `azure_openai`, `bedrock`, `github_copilot`, `openai_codex`, dll.) tidak akan muncul di `config.json`.
+
+**Channel whitelist** (`_CHANNEL_WHITELIST`):
+```python
+{"telegram", "whatsapp", "websocket", "email", "cli"}
+```
+Channel lain (e.g. `discord`, `slack`, `feishu`, `dingtalk`, `matrix`, `signal`, dll.) tidak akan muncul di `config.json`.
+
+**Catatan teknis:**
+- `_onboard_plugins()` awalnya menulis langsung ke JSON via `json.dump`, bypass filter.
+- Fix: `_onboard_plugins()` sekarang load → merge → re-parse via `Config.model_validate()` → save via `save_config()`.
+- Field bawaan channels (`sendProgress`, `sendToolHints`, `showReasoning`, `extractDocumentText`, `sendMaxRetries`, `transcriptionProvider`, `transcriptionLanguage`) menggunakan **camelCase** karena `Base` model pakai `alias_generator=to_camel`.
+
+### 3.6 README
 - README.md — Disederhanakan dari 477 baris
 
 ---
