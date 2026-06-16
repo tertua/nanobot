@@ -303,16 +303,10 @@ class WebUISettingsRouter:
     async def _handle_settings_cli_apps(self, request: WsRequest) -> Response:
         if not self._authorized(request):
             return self._unauthorized()
-        installed_only = (_query_first(self._query(request), "installed_only") or "").lower() in {
-            "1",
-            "true",
-            "yes",
-        }
+        # Force installed_only=True since CLI Apps is hidden in WebUI (nanowin)
+        installed_only = True
         try:
-            if installed_only:
-                payload = await asyncio.to_thread(cli_apps_payload, installed_only=True)
-            else:
-                payload = await asyncio.to_thread(cli_apps_payload)
+            payload = await asyncio.to_thread(cli_apps_payload, installed_only=True)
         except Exception:
             self.logger.exception("failed to load CLI Apps payload")
             return self._error_response(500, "failed to load CLI Apps")
