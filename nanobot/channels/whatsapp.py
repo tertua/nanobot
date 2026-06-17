@@ -175,7 +175,7 @@ class WhatsAppChannel(BaseChannel):
         if msg.content:
             try:
                 payload = {"type": "send", "to": chat_id, "text": msg.content}
-                await self._ws.send(json.dumps(payload, ensure_ascii=False))
+                await self._ws.send(json.dumps(payload, ensure_ascii=True))
             except Exception:
                 self.logger.exception("Error sending message")
                 raise
@@ -190,7 +190,7 @@ class WhatsAppChannel(BaseChannel):
                     "mimetype": mime or "application/octet-stream",
                     "fileName": media_path.rsplit("/", 1)[-1],
                 }
-                await self._ws.send(json.dumps(payload, ensure_ascii=False))
+                await self._ws.send(json.dumps(payload, ensure_ascii=True))
             except Exception:
                 self.logger.exception("Error sending media {}", media_path)
                 raise

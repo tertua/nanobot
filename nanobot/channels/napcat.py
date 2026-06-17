@@ -119,7 +119,7 @@ class NapcatChannel(BaseChannel):
                 await ws.send(
                     json.dumps(
                         {"action": "get_login_info", "params": {}, "echo": echo},
-                        ensure_ascii=False,
+                        ensure_ascii=True,
                     )
                 )
                 deadline = asyncio.get_running_loop().time() + _ACTION_TIMEOUT
@@ -493,7 +493,7 @@ class NapcatChannel(BaseChannel):
         self._pending[echo] = fut
         try:
             await self._ws.send(
-                json.dumps({"action": action, "params": params, "echo": echo}, ensure_ascii=False)
+                json.dumps({"action": action, "params": params, "echo": echo}, ensure_ascii=True)
             )
             resp = await asyncio.wait_for(fut, timeout=timeout)
             status = resp.get("status")

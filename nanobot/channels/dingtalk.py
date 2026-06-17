@@ -552,7 +552,7 @@ class DingTalkChannel(BaseChannel):
                 "robotCode": self.config.client_id,
                 "openConversationId": chat_id[6:],  # Remove "group:" prefix,
                 "msgKey": msg_key,
-                "msgParam": json.dumps(msg_param, ensure_ascii=False),
+                "msgParam": json.dumps(msg_param, ensure_ascii=True),
             }
         else:
             # Private chat
@@ -561,7 +561,7 @@ class DingTalkChannel(BaseChannel):
                 "robotCode": self.config.client_id,
                 "userIds": [chat_id],
                 "msgKey": msg_key,
-                "msgParam": json.dumps(msg_param, ensure_ascii=False),
+                "msgParam": json.dumps(msg_param, ensure_ascii=True),
             }
 
         try:

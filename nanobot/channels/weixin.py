@@ -228,7 +228,7 @@ class WeixinChannel(BaseChannel):
                 "typing_tickets": self._typing_tickets,
                 "base_url": self.config.base_url,
             }
-            state_file.write_text(json.dumps(data, ensure_ascii=False))
+            state_file.write_text(json.dumps(data, ensure_ascii=True))
 
     # ------------------------------------------------------------------
     # HTTP helpers  (matches api.ts buildHeaders / apiFetch)

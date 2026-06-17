@@ -112,7 +112,7 @@ def normalize_mochat_content(content: Any) -> str:
     if content is None:
         return ""
     try:
-        return json.dumps(content, ensure_ascii=False)
+        return json.dumps(content, ensure_ascii=True)
     except TypeError:
         return str(content)
 
@@ -898,7 +898,7 @@ class MochatChannel(BaseChannel):
             self._cursor_path.write_text(json.dumps({
                 "schemaVersion": 1, "updatedAt": datetime.utcnow().isoformat(),
                 "cursors": self._session_cursor,
-            }, ensure_ascii=False, indent=2) + "\n", "utf-8")
+            }, ensure_ascii=True, indent=2) + "\n", "utf-8")
         except Exception as e:
             self.logger.warning("Failed to save cursor file: {}", e)
 
