@@ -18,8 +18,8 @@ from nanobot.providers.registry import find_by_name
 from nanobot.utils.helpers import detect_image_mime
 
 _OPENROUTER_ATTRIBUTION_HEADERS = {
-    "HTTP-Referer": "https://github.com/HKUDS/nanobot",
-    "X-OpenRouter-Title": "nanobot",
+    "HTTP-Referer": "https://github.com/tertua/nanowin",
+    "X-OpenRouter-Title": "nanowin",
     "X-OpenRouter-Categories": "cli-agent,personal-agent",
 }
 _DEFAULT_TIMEOUT_S = 120.0
