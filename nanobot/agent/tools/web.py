@@ -846,7 +846,7 @@ class WebFetchTool(Tool):
         max_chars = kwargs.pop("maxChars", max_chars) or self.max_chars
         is_valid, error_msg = _validate_url_safe(url)
         if not is_valid:
-            return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+            return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=True)
 
         # Detect and fetch images directly to avoid Jina's textual image captioning
         try:
@@ -857,9 +857,9 @@ class WebFetchTool(Tool):
                     headers={"User-Agent": self.user_agent},
                 )
                 if redirect_error:
-                    return json.dumps({"error": redirect_error, "url": url}, ensure_ascii=False)
+                    return json.dumps({"error": redirect_error, "url": url}, ensure_ascii=True)
                 if r is None:
-                    return json.dumps({"error": "Fetch failed", "url": url}, ensure_ascii=False)
+                    return json.dumps({"error": "Fetch failed", "url": url}, ensure_ascii=True)
 
                 try:
                     ctype = r.headers.get("content-type", "")
@@ -911,7 +911,7 @@ class WebFetchTool(Tool):
                 "url": url, "finalUrl": data.get("url", url), "status": r.status_code,
                 "extractor": "jina", "truncated": truncated, "length": len(text),
                 "untrusted": True, "text": text,
-            }, ensure_ascii=False)
+            }, ensure_ascii=True)
         except Exception as e:
             logger.debug("Jina Reader failed for {}, falling back to readability: {}", url, e)
             return None
@@ -929,9 +929,9 @@ class WebFetchTool(Tool):
                     headers={"User-Agent": self.user_agent},
                 )
                 if redirect_error:
-                    return json.dumps({"error": redirect_error, "url": url}, ensure_ascii=False)
+                    return json.dumps({"error": redirect_error, "url": url}, ensure_ascii=True)
                 if r is None:
-                    return json.dumps({"error": "Fetch failed", "url": url}, ensure_ascii=False)
+                    return json.dumps({"error": "Fetch failed", "url": url}, ensure_ascii=True)
                 r.raise_for_status()
 
             ctype = r.headers.get("content-type", "")
@@ -939,7 +939,7 @@ class WebFetchTool(Tool):
                 return build_image_content_blocks(r.content, ctype, url, f"(Image fetched from: {url})")
 
             if "application/json" in ctype:
-                text, extractor = json.dumps(r.json(), indent=2, ensure_ascii=False), "json"
+                text, extractor = json.dumps(r.json(), indent=2, ensure_ascii=True), "json"
             elif "text/html" in ctype or r.text[:256].lower().startswith(("<!doctype", "<html")):
                 try:
                     text = self._extract_readable_html(r.text, extract_mode)
@@ -959,13 +959,13 @@ class WebFetchTool(Tool):
                 "url": url, "finalUrl": str(r.url), "status": r.status_code,
                 "extractor": extractor, "truncated": truncated, "length": len(text),
                 "untrusted": True, "text": text,
-            }, ensure_ascii=False)
+            }, ensure_ascii=True)
         except httpx.ProxyError as e:
             logger.exception("WebFetch proxy error for {}", url)
-            return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)
+            return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=True)
         except Exception as e:
             logger.exception("WebFetch error for {}", url)
-            return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
+            return json.dumps({"error": str(e), "url": url}, ensure_ascii=True)
 
     def _extract_readable_html(self, html_content: str, extract_mode: str) -> str:
         from readability import Document
