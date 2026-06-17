@@ -32,7 +32,7 @@ class ToolCallRequest:
         arguments = (
             self.arguments
             if isinstance(self.arguments, str)
-            else json.dumps(self.arguments, ensure_ascii=False)
+            else json.dumps(self.arguments, ensure_ascii=True)
         )
         tool_call = {
             "id": self.id,
@@ -104,7 +104,7 @@ def tool_arguments_object_for_replay(arguments: Any) -> dict[str, Any]:
 
 def tool_arguments_json_for_replay(arguments: Any) -> str:
     """Return JSON object string arguments for provider history replay only."""
-    return json.dumps(tool_arguments_object_for_replay(arguments), ensure_ascii=False)
+    return json.dumps(tool_arguments_object_for_replay(arguments), ensure_ascii=True)
 
 
 @dataclass
