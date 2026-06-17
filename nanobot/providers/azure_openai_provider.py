@@ -183,7 +183,10 @@ class AzureOpenAIProvider(LLMProvider):
         response = getattr(e, "response", None)
         body = getattr(e, "body", None) or getattr(response, "text", None)
         body_text = str(body).strip() if body is not None else ""
-        msg = f"Error: {body_text[:500]}" if body_text else f"Error calling Azure OpenAI: {e}"
+        # Sanitize surrogate pairs in error messages
+        safe_body = body_text.encode('utf-8', errors='replace').decode('utf-8')
+        safe_exc = str(e).encode('utf-8', errors='replace').decode('utf-8')
+        msg = f"Error: {safe_body[:500]}" if safe_body else f"Error calling Azure OpenAI: {safe_exc}"
         retry_after = LLMProvider._extract_retry_after_from_headers(getattr(response, "headers", None))
         if retry_after is None:
             retry_after = LLMProvider._extract_retry_after(msg)

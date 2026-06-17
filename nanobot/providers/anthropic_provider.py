@@ -80,7 +80,10 @@ class AnthropicProvider(LLMProvider):
                 except Exception:
                     payload = None
         payload_text = payload if isinstance(payload, str) else str(payload) if payload is not None else ""
-        msg = f"Error: {payload_text.strip()[:500]}" if payload_text.strip() else f"Error calling LLM: {e}"
+        # Sanitize surrogate pairs in error messages
+        safe_payload = payload_text.encode('utf-8', errors='replace').decode('utf-8')
+        safe_exc = str(e).encode('utf-8', errors='replace').decode('utf-8')
+        msg = f"Error: {safe_payload.strip()[:500]}" if safe_payload.strip() else f"Error calling LLM: {safe_exc}"
         retry_after = cls._extract_retry_after_from_headers(headers)
         if retry_after is None:
             retry_after = LLMProvider._extract_retry_after(msg)

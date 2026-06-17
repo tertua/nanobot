@@ -238,7 +238,8 @@ def _friendly_error(status_code: int, raw: str) -> str:
 def _codex_error_response(exc: Exception) -> LLMResponse:
     """Convert Codex transport/API failures into actionable, retryable metadata."""
     exc_type = "CodexHTTPError" if isinstance(exc, _CodexHTTPError) else type(exc).__name__
-    detail = str(exc).strip()
+    # Sanitize surrogate pairs in exception details
+    detail = str(exc).strip().encode('utf-8', errors='replace').decode('utf-8')
 
     status_code = getattr(exc, "status_code", None)
     error_kind: str | None = None

@@ -1306,7 +1306,10 @@ class OpenAICompatProvider(LLMProvider):
             or getattr(getattr(e, "response", None), "text", None)
         )
         body_text = body if isinstance(body, str) else str(body) if body is not None else ""
-        msg = f"Error: {body_text.strip()[:500]}" if body_text.strip() else f"Error calling LLM: {e}"
+        # Sanitize surrogate pairs in error messages
+        safe_body = body_text.encode('utf-8', errors='replace').decode('utf-8')
+        safe_exc = str(e).encode('utf-8', errors='replace').decode('utf-8')
+        msg = f"Error: {safe_body.strip()[:500]}" if safe_body.strip() else f"Error calling LLM: {safe_exc}"
 
         text = f"{body_text} {e}".lower()
         if spec and spec.is_local and ("502" in text or "connection" in text or "refused" in text):

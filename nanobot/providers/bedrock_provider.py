@@ -638,9 +638,11 @@ class BedrockProvider(LLMProvider):
         code = error_obj.get("Code") if isinstance(error_obj, dict) else None
         status_code = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
         body = message or str(e)
+        # Sanitize surrogate pairs in error body
+        safe_body = body.encode('utf-8', errors='replace').decode('utf-8')
         retry_after = cls._extract_retry_after_from_headers(headers)
         if retry_after is None:
-            retry_after = cls._extract_retry_after(body)
+            retry_after = cls._extract_retry_after(safe_body)
 
         error_name = e.__class__.__name__.lower()
         error_kind = None
@@ -657,7 +659,7 @@ class BedrockProvider(LLMProvider):
             should_retry = True
 
         return LLMResponse(
-            content=f"Error: {str(body).strip()[:500]}",
+            content=f"Error: {safe_body.strip()[:500]}",
             finish_reason="error",
             retry_after=retry_after,
             error_status_code=int(status_code) if status_code is not None else None,
