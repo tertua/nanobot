@@ -70,10 +70,8 @@ def _apply_ssrf_whitelist(config: Config) -> None:
 _PROVIDER_WHITELIST: set[str] = {
     "openai",
     "custom",
-    "anthropic",
-    "openrouter",
     "aihubmix",
-    "gemini",
+    "openrouter",
     "nvidia",
 }
 """Provider keys that appear in generated config.json.
