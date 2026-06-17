@@ -47,6 +47,7 @@ class _FsTool(Tool):
         extra_allowed_dirs: list[Path] | None = None,
         extra_read_allowed_dirs: list[Path] | None = None,
         extra_write_allowed_dirs: list[Path] | None = None,
+        extra_read_allowed_files: list[Path] | None = None,
         extra_write_allowed_files: list[Path] | None = None,
         file_states: FileStates | None = None,
         restrict_to_workspace: bool | None = None,
@@ -61,7 +62,9 @@ class _FsTool(Tool):
             *(extra_read_allowed_dirs or []),
         ]
         self._extra_write_allowed_dirs = list(extra_write_allowed_dirs or [])
+        self._extra_read_allowed_files = list(extra_read_allowed_files or [])
         self._extra_write_allowed_files = list(extra_write_allowed_files or [])
+        self._extra_allowed_dirs = self._extra_read_allowed_dirs
         self._restrict_to_workspace = (
             bool(restrict_to_workspace)
             if restrict_to_workspace is not None
@@ -100,7 +103,28 @@ class _FsTool(Tool):
             return self._explicit_file_states
         return current_file_states(self._fallback_file_states)
 
-    def _resolve(self, path: str) -> Path:
+    def _effective_allowed_root(self, access_allowed_root: Path | None) -> Path | None:
+        if access_allowed_root is None:
+            return None
+        if self._allowed_dir is None or self._workspace is None:
+            return access_allowed_root
+        try:
+            allowed_dir = Path(self._allowed_dir).expanduser().resolve(strict=False)
+            workspace = Path(self._workspace).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return access_allowed_root
+        if allowed_dir == workspace:
+            return access_allowed_root
+        return allowed_dir
+
+    def _resolve_with_extra(
+        self,
+        path: str,
+        extra_allowed_dirs: list[Path] | None,
+        extra_allowed_files: list[Path] | None,
+        *,
+        include_media_dir: bool,
+    ) -> Path:
         access = current_tool_workspace(
             self._workspace,
             restrict_to_workspace=self._restrict_to_workspace,
@@ -119,7 +143,7 @@ class _FsTool(Tool):
         return self._resolve_with_extra(
             path,
             self._extra_read_allowed_dirs,
-            None,
+            self._extra_read_allowed_files,
             include_media_dir=True,
         )
 

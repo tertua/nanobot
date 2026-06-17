@@ -98,11 +98,13 @@ def resolve_allowed_path(
     workspace: str | Path | None = None,
     allowed_root: str | Path | None = None,
     extra_allowed_roots: Iterable[str | Path] | None = None,
+    extra_allowed_files: Iterable[str | Path] | None = None,
     strict: bool = False,
 ) -> Path:
     """Resolve a path and enforce containment in allowed roots when configured."""
     resolved = resolve_path(path, workspace, strict=False)
-    if allowed_root is None:
+    files = list(extra_allowed_files or [])
+    if allowed_root is None and not files:
         return resolve_path(path, workspace, strict=strict) if strict else resolved
 
     roots = []
@@ -117,7 +119,7 @@ def resolve_allowed_path(
     if not is_path_allowed(resolved, roots) and not exact_allowed:
         boundary = Path(allowed_root).expanduser() if allowed_root is not None else "allowed files"
         raise WorkspaceBoundaryError(
-            f"Path {path} is outside allowed directory {Path(allowed_root).expanduser()}"
+            f"Path {path} is outside allowed directory {boundary}"
             + WORKSPACE_BOUNDARY_NOTE
         )
     if strict:
