@@ -1345,7 +1345,9 @@ class AgentLoop:
                 return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+        # Sanitize surrogate pairs to prevent log crashes
+        safe_preview = preview.encode('utf-8', errors='replace').decode('utf-8')
+        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, safe_preview)
 
         meta = dict(msg.metadata or {})
         if on_stream is not None and stop_reason not in {"error", "tool_error"}:

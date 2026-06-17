@@ -573,7 +573,9 @@ class LLMProvider(ABC):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
+            # Sanitize surrogate pairs in exception messages
+            exc_str = str(exc).encode('utf-8', errors='replace').decode('utf-8')
+            return LLMResponse(content=f"Error calling LLM: {exc_str}", finish_reason="error")
 
     async def chat_stream(
         self,
@@ -617,7 +619,9 @@ class LLMProvider(ABC):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
+            # Sanitize surrogate pairs in exception messages
+            exc_str = str(exc).encode('utf-8', errors='replace').decode('utf-8')
+            return LLMResponse(content=f"Error calling LLM: {exc_str}", finish_reason="error")
 
     async def chat_stream_with_retry(
         self,
