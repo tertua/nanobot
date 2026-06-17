@@ -677,7 +677,7 @@ class WebUITranscriptRecorder:
 
     def append(self, chat_id: str, event: dict[str, Any]) -> None:
         try:
-            dup = json.loads(json.dumps(event, ensure_ascii=False))
+            dup = json.loads(json.dumps(event, ensure_ascii=True))
             append_transcript_object(f"websocket:{chat_id}", dup)
         except (OSError, ValueError, TypeError) as e:
             self._log.warning("webui transcript append failed: {}", e)
