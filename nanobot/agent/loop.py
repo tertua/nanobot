@@ -863,7 +863,9 @@ class AgentLoop:
                 await on_stream(result.final_content or "")
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
-            logger.error("LLM returned error: {}", (result.final_content or "")[:200])
+            # Sanitize surrogate pairs in error content before logging
+            safe_error = (result.final_content or "")[:200].encode('utf-8', errors='replace').decode('utf-8')
+            logger.error("LLM returned error: {}", safe_error)
         return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
 
     async def run(self) -> None:
