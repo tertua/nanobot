@@ -150,7 +150,7 @@ class _TranscriptChunkRef(NamedTuple):
 
 
 def _record_json_line(record: dict[str, Any]) -> str:
-    return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(record, ensure_ascii=True, separators=(",", ":"))
 
 
 def _read_transcript_file(path: Path) -> list[dict[str, Any]]:
@@ -746,7 +746,7 @@ def fork_transcript_before_user_index(
                 found_target = True
                 break
             user_index += 1
-        dup = json.loads(json.dumps(row, ensure_ascii=False))
+        dup = json.loads(json.dumps(row, ensure_ascii=True))
         if target_chat_id is not None:
             dup["chat_id"] = target_chat_id
         copied.append(dup)
@@ -790,7 +790,7 @@ def write_session_messages_as_transcript(
             for key in ("cli_apps", "mcp_presets"):
                 value = msg.get(key)
                 if isinstance(value, list) and value:
-                    row[key] = json.loads(json.dumps(value, ensure_ascii=False))
+                    row[key] = json.loads(json.dumps(value, ensure_ascii=True))
         elif role == "assistant" and text.strip():
             row = {"event": "message", "chat_id": target_chat_id, "text": text}
             media = msg.get("media")

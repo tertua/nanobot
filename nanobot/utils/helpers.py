@@ -355,7 +355,7 @@ def maybe_persist_tool_result(
     path = bucket / f"{safe_filename(tool_call_id)}.{suffix}"
     if not path.exists():
         if suffix == "json" and isinstance(content, list):
-            _write_text_atomic(path, json.dumps(content, ensure_ascii=False, indent=2))
+            _write_text_atomic(path, json.dumps(content, ensure_ascii=True, indent=2))
         else:
             _write_text_atomic(path, text_payload)
 
@@ -442,7 +442,7 @@ def estimate_prompt_tokens(
 
             tc = msg.get("tool_calls")
             if tc:
-                parts.append(json.dumps(tc, ensure_ascii=False))
+                parts.append(json.dumps(tc, ensure_ascii=True))
 
             rc = msg.get("reasoning_content")
             if isinstance(rc, str) and rc:
@@ -454,7 +454,7 @@ def estimate_prompt_tokens(
                     parts.append(value)
 
         if tools:
-            parts.append(json.dumps(tools, ensure_ascii=False))
+            parts.append(json.dumps(tools, ensure_ascii=True))
 
         per_message_overhead = len(messages) * 4
         return len(enc.encode("\n".join(parts))) + per_message_overhead
@@ -475,16 +475,16 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
                 if text:
                     parts.append(text)
             else:
-                parts.append(json.dumps(part, ensure_ascii=False))
+                parts.append(json.dumps(part, ensure_ascii=True))
     elif content is not None:
-        parts.append(json.dumps(content, ensure_ascii=False))
+        parts.append(json.dumps(content, ensure_ascii=True))
 
     for key in ("name", "tool_call_id"):
         value = message.get(key)
         if isinstance(value, str) and value:
             parts.append(value)
     if message.get("tool_calls"):
-        parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
+        parts.append(json.dumps(message["tool_calls"], ensure_ascii=True))
 
     rc = message.get("reasoning_content")
     if isinstance(rc, str) and rc:

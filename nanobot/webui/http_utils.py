@@ -62,7 +62,7 @@ def host_for_url(host: str, port: int) -> str:
 
 
 def http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
-    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    body = json.dumps(data, ensure_ascii=True).encode("utf-8")
     headers = Headers(
         [
             ("Date", email.utils.formatdate(usegmt=True)),

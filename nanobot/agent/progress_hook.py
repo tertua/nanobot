@@ -122,7 +122,7 @@ class AgentProgressHook(AgentHook):
                 tool_events=tool_events,
             )
         for tc in context.tool_calls:
-            args_str = json.dumps(tc.arguments, ensure_ascii=False)
+            args_str = json.dumps(tc.arguments, ensure_ascii=True)
             logger.info("Tool call: {}({})", tc.name, args_str[:200])
         if self._set_tool_context:
             self._set_tool_context(
