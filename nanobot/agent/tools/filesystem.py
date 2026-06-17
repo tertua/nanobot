@@ -45,13 +45,23 @@ class _FsTool(Tool):
         workspace: Path | None = None,
         allowed_dir: Path | None = None,
         extra_allowed_dirs: list[Path] | None = None,
+        extra_read_allowed_dirs: list[Path] | None = None,
+        extra_write_allowed_dirs: list[Path] | None = None,
+        extra_write_allowed_files: list[Path] | None = None,
         file_states: FileStates | None = None,
         restrict_to_workspace: bool | None = None,
         sandbox_restricts_workspace: bool = False,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
-        self._extra_allowed_dirs = extra_allowed_dirs
+        # Legacy alias: extra_allowed_dirs is read-only. Write-capable tools
+        # must opt in via extra_write_allowed_dirs.
+        self._extra_read_allowed_dirs = [
+            *(extra_allowed_dirs or []),
+            *(extra_read_allowed_dirs or []),
+        ]
+        self._extra_write_allowed_dirs = list(extra_write_allowed_dirs or [])
+        self._extra_write_allowed_files = list(extra_write_allowed_files or [])
         self._restrict_to_workspace = (
             bool(restrict_to_workspace)
             if restrict_to_workspace is not None
@@ -99,9 +109,30 @@ class _FsTool(Tool):
         return resolve_workspace_path(
             path,
             access.project_path,
-            access.allowed_root,
-            self._extra_allowed_dirs,
+            self._effective_allowed_root(access.allowed_root),
+            extra_allowed_dirs,
+            extra_allowed_files,
+            include_media_dir=include_media_dir,
         )
+
+    def _resolve_read(self, path: str) -> Path:
+        return self._resolve_with_extra(
+            path,
+            self._extra_read_allowed_dirs,
+            None,
+            include_media_dir=True,
+        )
+
+    def _resolve_write(self, path: str) -> Path:
+        return self._resolve_with_extra(
+            path,
+            self._extra_write_allowed_dirs,
+            self._extra_write_allowed_files,
+            include_media_dir=False,
+        )
+
+    def _resolve(self, path: str) -> Path:
+        return self._resolve_read(path)
 
     def _display_workspace(self) -> Path | None:
         return current_tool_workspace(self._workspace).project_path
