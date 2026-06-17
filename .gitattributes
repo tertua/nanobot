@@ -1,3 +1,4 @@
-# Keep docs/ on master branch immune from upstream (main) merges.
-# This prevents old upstream docs from re-appearing after merge from HKUDS/main.
+# Keep on master branch immune from upstream (main) merges.
+# This prevents old upstream from re-appearing after merge from HKUDS/main.
 docs/** merge=ours
+tests/** merge=ours
