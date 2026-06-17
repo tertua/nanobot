@@ -177,7 +177,7 @@ class WebUISettingsRouter:
             if isinstance(value, str):
                 text = value.strip()
             else:
-                text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                text = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
             if text:
                 merged[key] = [text]
         return merged

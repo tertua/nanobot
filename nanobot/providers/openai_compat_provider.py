@@ -307,7 +307,7 @@ def _merge_unique_list(base: Any, override: Any) -> Any:
     seen: set[str] = set()
     for value in [*base, *override]:
         try:
-            key = json.dumps(value, sort_keys=True, ensure_ascii=False)
+            key = json.dumps(value, sort_keys=True, ensure_ascii=True)
         except Exception:
             key = repr(value)
         if key in seen:
@@ -512,7 +512,7 @@ class OpenAICompatProvider(LLMProvider):
         if isinstance(text, str) and text:
             return text
         try:
-            dumped = json.dumps(content, ensure_ascii=False)
+            dumped = json.dumps(content, ensure_ascii=True)
         except Exception:
             dumped = str(content)
         return dumped or "(empty)"
