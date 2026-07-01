@@ -29,12 +29,14 @@ import {
   loadSavedSecret,
   saveSecret,
 } from "@/lib/bootstrap";
+import { displayTitle } from "@/lib/chat-groups";
 import { deriveTitle } from "@/lib/format";
 import { NanobotClient } from "@/lib/nanobot-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type {
   ChatSummary,
   RuntimeSurface,
+  SessionAutomationJob,
   SettingsPayload,
   WorkspaceScopePayload,
   WorkspacesPayload,
@@ -68,6 +70,7 @@ const LEGACY_COMPLETED_RUNS_STORAGE_KEY = "nanobot-webui.sidebar.completed-runs.
 const RESTART_STARTED_KEY = "nanobot-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
 const SIDEBAR_RAIL_WIDTH = 56;
+const MOBILE_SIDEBAR_WIDTH = `min(${SIDEBAR_WIDTH}px, calc(100vw - 0.75rem))`;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
 type ShellView = "chat" | "settings" | "apps" | "automations" | "skills";
@@ -82,6 +85,7 @@ const SETTINGS_SECTION_KEYS: SettingsSectionKey[] = [
   "appearance",
   "models",
   "image",
+  "voice",
   "browser",
   "apps",
   "automations",
@@ -137,9 +141,7 @@ function readShellRoute(): ShellRoute {
   if (path.startsWith("/chat/")) {
     const encoded = path.slice("/chat/".length);
     try {
-      const raw = decodeURIComponent(encoded).trim();
-      // Support both old format ("websocket:chatId") and new clean format ("chatId")
-      const key = raw.includes(":") ? raw : `websocket:${raw}`;
+      const key = decodeURIComponent(encoded).trim();
       return key
         ? { view: "chat", activeKey: key, settingsSection: "overview" }
         : defaultShellRoute();
@@ -147,24 +149,14 @@ function readShellRoute(): ShellRoute {
       return defaultShellRoute();
     }
   }
-  // New clean URL format: #chatId (no leading "/", just the chat ID directly)
-  if (path && !path.startsWith("/")) {
-    const raw = decodeURIComponent(path).trim();
-    if (raw) {
-      const key = `websocket:${raw}`;
-      return { view: "chat", activeKey: key, settingsSection: "overview" };
-    }
-  }
   return defaultShellRoute();
 }
 
 function shellRouteHash(route: ShellRoute): string {
   if (route.view === "chat") {
-    if (!route.activeKey) return "#/new";
-    // Strip channel prefix (e.g., "websocket:xxx" → "xxx") for a clean URL
-    const colonIdx = route.activeKey.indexOf(":");
-    const chatId = colonIdx >= 0 ? route.activeKey.slice(colonIdx + 1) : route.activeKey;
-    return `#${encodeURIComponent(chatId)}`;
+    return route.activeKey
+      ? `#/chat/${encodeURIComponent(route.activeKey)}`
+      : "#/new";
   }
   const params = new URLSearchParams();
   if (route.activeKey) params.set("chat", route.activeKey);
@@ -544,7 +536,15 @@ function Shell({
   const { t, i18n } = useTranslation();
   const { client, token } = useClient();
   const { theme, toggle } = useTheme();
-  const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
+  const {
+    sessions,
+    loading,
+    refresh,
+    createChat,
+    forkChat,
+    deleteChat,
+    getSessionAutomations,
+  } = useSessions();
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);
   const initialRouteRef = useRef<ShellRoute | null>(null);
@@ -563,6 +563,7 @@ function Shell({
   const [pendingDelete, setPendingDelete] = useState<{
     key: string;
     label: string;
+    automations?: SessionAutomationJob[];
   } | null>(null);
   const [pendingRename, setPendingRename] = useState<{
     key: string;
@@ -915,6 +916,33 @@ function Shell({
       return null;
     }
   }, [activeWorkspaceScope, createChat, navigate, t]);
+
+  const onForkChat = useCallback(async (
+    sourceChatId: string,
+    beforeUserIndex: number,
+  ) => {
+    try {
+      const sourceSession = sessions.find((session) => session.chatId === sourceChatId);
+      const sourceTitle = sourceSession
+        ? displayTitle(sourceSession, sidebarState.title_overrides, t("chat.newChat"))
+        : t("chat.newChat");
+      const chatId = await forkChat(
+        sourceChatId,
+        beforeUserIndex,
+        t("chat.forkTitle", { title: sourceTitle }),
+      );
+      navigate({
+        view: "chat",
+        activeKey: `websocket:${chatId}`,
+        settingsSection: "overview",
+      });
+      setMobileSidebarOpen(false);
+      return chatId;
+    } catch (e) {
+      console.error("Failed to fork chat", e);
+      return null;
+    }
+  }, [forkChat, navigate, sessions, sidebarState.title_overrides, t]);
 
   const onNewChat = useCallback(() => {
     navigate(defaultShellRoute());
@@ -1279,32 +1307,46 @@ function Shell({
   const onConfirmDelete = useCallback(async () => {
     if (!pendingDelete) return;
     const key = pendingDelete.key;
+    const hasAutomations = (pendingDelete.automations?.length ?? 0) > 0;
     const deletingActive = activeKey === key;
     const currentIndex = sessions.findIndex((s) => s.key === key);
     const fallbackKey = deletingActive
       ? (sessions[currentIndex + 1]?.key ?? sessions[currentIndex - 1]?.key ?? null)
       : activeKey;
-    setPendingDelete(null);
-    if (deletingActive) {
-      navigate({
-        view: "chat",
-        activeKey: fallbackKey,
-        settingsSection: "overview",
-      }, { replace: true });
-    }
     try {
-      await deleteChat(key);
-    } catch (e) {
+      const result = await deleteChat(
+        key,
+        hasAutomations ? { deleteAutomations: true } : undefined,
+      );
+      if (result.blocked_by_automations) {
+        setPendingDelete({
+          ...pendingDelete,
+          automations: result.automations ?? [],
+        });
+        return;
+      }
+      setPendingDelete(null);
       if (deletingActive) {
         navigate({
           view: "chat",
-          activeKey: key,
+          activeKey: fallbackKey,
           settingsSection: "overview",
         }, { replace: true });
       }
+    } catch (e) {
       console.error("Failed to delete session", e);
     }
   }, [pendingDelete, deleteChat, activeKey, navigate, sessions]);
+
+  const onRequestDelete = useCallback(async (key: string, label: string) => {
+    let automations: SessionAutomationJob[] = [];
+    try {
+      automations = await getSessionAutomations(key);
+    } catch {
+      // Delete remains protected by the backend block; prefetch only improves the first prompt.
+    }
+    setPendingDelete({ key, label, automations });
+  }, [getSessionAutomations]);
 
   const headerTitle = activeSession
     ? sidebarState.title_overrides[activeSession.key] ||
@@ -1348,8 +1390,7 @@ function Shell({
     loading,
     onNewChat,
     onSelect: onSelectChat,
-    onRequestDelete: (key: string, label: string) =>
-      setPendingDelete({ key, label }),
+    onRequestDelete,
     onTogglePin,
     onRequestRename,
     onToggleArchive,
@@ -1491,7 +1532,7 @@ function Shell({
                 showCloseButton={false}
                 aria-describedby={undefined}
                 className="p-0 lg:hidden"
-                style={{ width: SIDEBAR_WIDTH, maxWidth: SIDEBAR_WIDTH }}
+                style={{ width: MOBILE_SIDEBAR_WIDTH, maxWidth: MOBILE_SIDEBAR_WIDTH }}
               >
                 <SheetTitle className="sr-only">{t("sidebar.navigation")}</SheetTitle>
                 <Sidebar
@@ -1530,6 +1571,7 @@ function Shell({
                 onToggleSidebar={toggleSidebar}
                 onNewChat={onNewChat}
                 onCreateChat={onCreateChat}
+                onForkChat={onForkChat}
                 onTurnEnd={onTurnEnd}
                 theme={theme}
                 onToggleTheme={toggle}
@@ -1575,6 +1617,7 @@ function Shell({
         <DeleteConfirm
           open={!!pendingDelete}
           title={pendingDelete?.label ?? ""}
+          automations={pendingDelete?.automations}
           onCancel={() => setPendingDelete(null)}
           onConfirm={onConfirmDelete}
         />
@@ -1596,7 +1639,7 @@ function Shell({
         {restartToast ? (
           <div
             role="status"
-            className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full border border-border/70 bg-popover px-4 py-2 text-sm font-medium text-popover-foreground shadow-lg"
+            className="fixed left-1/2 top-[calc(0.75rem+env(safe-area-inset-top))] z-50 max-w-[calc(100vw-1rem)] -translate-x-1/2 rounded-full border border-border/70 bg-popover px-4 py-2 text-sm font-medium text-popover-foreground shadow-lg"
           >
             {restartToast}
           </div>
