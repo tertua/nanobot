@@ -23,7 +23,8 @@ def resolve_workspace_path(
     include_media_dir: bool = True,
 ) -> Path:
     """Resolve path against workspace and enforce allowed directory containment."""
-    extra_roots = [get_media_dir(), *(extra_allowed_dirs or [])] if allowed_dir else None
+    media_roots = [get_media_dir()] if include_media_dir else []
+    extra_roots = [*media_roots, *(extra_allowed_dirs or [])] if allowed_dir else None
     return resolve_allowed_path(
         path,
         workspace=workspace,

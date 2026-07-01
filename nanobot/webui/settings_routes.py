@@ -177,7 +177,7 @@ class WebUISettingsRouter:
             if isinstance(value, str):
                 text = value.strip()
             else:
-                text = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+                text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
             if text:
                 merged[key] = [text]
         return merged
@@ -303,10 +303,13 @@ class WebUISettingsRouter:
     async def _handle_settings_cli_apps(self, request: WsRequest) -> Response:
         if not self._authorized(request):
             return self._unauthorized()
-        # Force installed_only=True since CLI Apps is hidden in WebUI (nanowin)
-        installed_only = True
+        installed_only = (_query_first(self._query(request), "installed_only") or "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
         try:
-            payload = await asyncio.to_thread(cli_apps_payload, installed_only=True)
+            payload = await cli_apps_payload(installed_only=installed_only)
         except Exception:
             self.logger.exception("failed to load CLI Apps payload")
             return self._error_response(500, "failed to load CLI Apps")

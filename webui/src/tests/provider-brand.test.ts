@@ -41,4 +41,9 @@ describe("provider brand logos", () => {
     expect(providerBrand("xiaomi_mimo")?.logoUrls[0]).toBe("https://mimo.xiaomi.com/mimo-v2-pro/assets/logo.svg");
     expect(providerBrand("mimo")?.logoUrls[0]).toBe("https://mimo.xiaomi.com/mimo-v2-pro/assets/logo.svg");
   });
+
+  it("keeps Keenable web search settings on the first-party brand domain", () => {
+    expect(providerBrand("keenable")?.logoUrls).toContain("https://keenable.ai/favicon.ico");
+    expect(providerBrand("keenable")?.initials).toBe("K");
+  });
 });
