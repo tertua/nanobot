@@ -32,7 +32,7 @@ def _provider_extra_headers(
     spec: ProviderSpec | None,
     provider_config: ProviderConfig | None,
 ) -> dict[str, str] | None:
-    headers = dict(spec.default_extra_headers) if spec else {}
+    headers = dict(spec.default_extra_headers) if spec and spec.default_extra_headers else {}
     if provider_config and provider_config.extra_headers:
         headers.update(provider_config.extra_headers)
     return headers or None
