@@ -118,6 +118,14 @@ Pada fork Windows portable ini, workspace default biasanya diarahkan ke folder p
 
 ## 4. Providers Config
 
+### 4.0 Provider Whitelist
+
+Fork ini menerapkan **whitelist** — hanya provider berikut yang muncul di `config.json`:
+```python
+{"openai", "custom", "aihubmix", "openrouter", "nvidia"}
+```
+Provider lain (deepseek, ollama, azure_openai, bedrock, dll.) tidak akan disimpan oleh `save_config()`.
+
 ### 4.1 Built-in Providers
 
 ```json
@@ -243,6 +251,14 @@ Fallback dapat berupa:
 ---
 
 ## 6. Channels Config
+
+### 6.0 Channel Whitelist
+
+Fork ini menerapkan **whitelist** — hanya channel berikut yang muncul di `config.json`:
+```python
+{"telegram", "whatsapp", "websocket", "email", "cli"}
+```
+Channel lain (discord, slack, feishu, dingtalk, matrix, signal, dll.) tidak akan disimpan oleh `save_config()`.
 
 ### 6.1 Global Channel Settings
 

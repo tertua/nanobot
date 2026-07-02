@@ -173,6 +173,7 @@ Tool-tool utama yang tersedia (tergantung konfigurasi):
 | `exec` | `shell.py` | Jalankan shell command |
 | `web_search` | `web.py` | Cari di web |
 | `web_fetch` | `web.py` | Fetch URL ke markdown |
+| `search` | `search.py` | Search files/code in workspace |
 | `message` | `message.py` | Kirim pesan proaktif |
 | `cron` | `cron.py` | Schedule reminders/tasks |
 | `long_task` / `complete_goal` | `self.py` | Sustained goals |
@@ -222,6 +223,12 @@ Lihat `ProvidersConfig` di `schema.py` untuk daftar lengkap. Yang utama:
 - **ollama**, **lm_studio** (local)
 - **azure_openai**, **bedrock** (enterprise)
 - **gemini**, **moonshot**, **siliconflow**, **volcengine**, dll.
+
+**Provider Whitelist** (hanya provider ini yang muncul di config.json):
+```python
+{"openai", "custom", "aihubmix", "openrouter", "nvidia"}
+```
+Lihat `nanobot/config/loader.py` → `_PROVIDER_WHITELIST`.
 
 ### 5.3 Model Presets
 
@@ -345,8 +352,14 @@ class MyChannel(BaseChannel):
 - CLI (`cli`) — terminal interaktif
 - WebUI (`webui`) — built-in web interface
 - Telegram, Discord, Slack, Feishu/Lark
-- DingTalk, WeChat (MoChat), MS Teams
-- Matrix, Email, dan custom channels
+- DingTalk, WeChat (MoChat/NapCat), MS Teams
+- Matrix, Email, QQ, dan custom channels
+
+**Channel Whitelist** (hanya channel ini yang muncul di config.json):
+```python
+{"telegram", "whatsapp", "websocket", "email", "cli"}
+```
+Lihat `nanobot/config/loader.py` → `_CHANNEL_WHITELIST`.
 
 ---
 
