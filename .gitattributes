@@ -1,4 +1,5 @@
 # Keep on master branch immune from upstream (main) merges.
 # This prevents old upstream from re-appearing after merge from HKUDS/main.
-docs/** merge=ours
-tests/** merge=ours
+docs/ merge=ours
+tests/ merge=ours
+webui/src/i18n/locales merge=ours
