@@ -1196,6 +1196,7 @@ export function useNanobotStream(
     if (!chatId) return;
     flushPendingStreamEvents();
     setIsStreaming(false);
+    setRunStartedAt(null);
     setMessages((prev) => {
       buffer.current = null;
       activeAssistantRef.current = null;

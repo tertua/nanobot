@@ -378,12 +378,16 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     handledLatestPromptSignalRef.current = scrollToLatestUserPromptSignal;
     cancelScheduledBottomScroll();
     activeTurnPromptRef.current = latest.id;
-    if (!scrollToPromptTopNow(latest.id)) activeTurnPromptRef.current = null;
+    if (!scrollToPromptTopNow(latest.id)) {
+      activeTurnPromptRef.current = null;
+      scrollToBottom(false, 4);
+    }
   }, [
     cancelScheduledBottomScroll,
     messages,
     scrollToLatestUserPromptSignal,
     scrollToPromptTopNow,
+    scrollToBottom,
   ]);
 
   useLayoutEffect(() => {
