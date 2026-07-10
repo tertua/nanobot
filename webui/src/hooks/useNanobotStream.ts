@@ -1179,7 +1179,10 @@ export function useNanobotStream(
           },
         ];
       });
-      if (!sideChannel) setIsStreaming(true);
+      if (!sideChannel) {
+        setIsStreaming(true);
+        setRunStartedAt(Math.floor(Date.now() / 1000));
+      }
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
       const wireOptions = { ...options, turnId };
       delete wireOptions.sideChannel;
