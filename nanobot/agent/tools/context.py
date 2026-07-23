@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -25,6 +26,9 @@ class RequestContext:
     original_user_text: str | None = None
     runtime: LLMRuntime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    sender_id: str | None = None
+    turn_id: str | None = None
+    workspace: Path | None = None
 
 
 @runtime_checkable
@@ -67,6 +71,7 @@ class ToolContext:
     bus: Any | None = None
     subagent_manager: Any | None = None
     cron_service: Any | None = None
+    exec_session_manager: Any | None = None
     sessions: Any | None = None
     file_state_store: Any = field(default=None)
     provider_snapshot_loader: Callable[[], Any] | None = None

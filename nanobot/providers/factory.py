@@ -18,6 +18,7 @@ class ProviderSnapshot:
     context_window_tokens: int
     signature: tuple[object, ...]
     generation: GenerationSettings | None = None
+    model_preset: str | None = None
 
 
 def _resolve_model_preset(
@@ -59,10 +60,10 @@ def _make_provider_core(
     if spec and spec.is_transcription_only:
         raise ValueError(f"Provider '{provider_name}' only supports transcription.")
     backend = spec.backend if spec else "openai_compat"
-    if p and p.proxy and backend not in {"openai_compat", "openai_codex"}:
+    if p and p.proxy and backend not in {"openai_compat", "openai_codex", "xai_grok"}:
         raise ValueError(
             f"providers.{provider_name}.proxy is only supported for "
-            "OpenAI-compatible providers and OpenAI Codex."
+            "OpenAI-compatible providers, OpenAI Codex, and xAI Grok."
         )
 
     if backend == "azure_openai":
@@ -88,6 +89,15 @@ def _make_provider_core(
         provider = OpenAICodexProvider(
             default_model=model,
             proxy=getattr(p, "proxy", None) if p else None,
+            extra_body=p.extra_body if p else None,
+        )
+    elif backend == "xai_grok":
+        from nanobot.providers.xai_grok_provider import XAIGrokProvider
+
+        provider = XAIGrokProvider(
+            default_model=model,
+            proxy=getattr(p, "proxy", None) if p else None,
+            extra_body=p.extra_body if p else None,
         )
     elif backend == "azure_openai":
         from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
@@ -260,6 +270,11 @@ def build_provider_snapshot(
     preset: ModelPresetConfig | None = None,
 ) -> ProviderSnapshot:
     resolved = _resolve_model_preset(config, preset_name=preset_name, preset=preset)
+    selected_preset = (
+        config.agents.defaults.model_preset
+        if preset_name is None and preset is None
+        else preset_name
+    )
     fallback_windows = [
         fallback.context_window_tokens
         for fallback in _resolve_fallback_presets(config, resolved)
@@ -270,6 +285,7 @@ def build_provider_snapshot(
         context_window_tokens=min([resolved.context_window_tokens, *fallback_windows]),
         signature=provider_signature(config, preset=resolved),
         generation=resolved.to_generation_settings(),
+        model_preset=selected_preset,
     )
 
 

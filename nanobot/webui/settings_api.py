@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
+import threading
 import time
 from contextlib import suppress
 from typing import Any, Literal
@@ -29,6 +31,7 @@ from nanobot.providers.image_generation import (
     image_gen_provider_names,
 )
 from nanobot.providers.registry import PROVIDERS, create_dynamic_spec, find_by_name
+from nanobot.security.network import is_loopback_host
 from nanobot.security.workspace_access import workspace_sandbox_status
 from nanobot.webui.token_usage import token_usage_payload
 from nanobot.webui.workspaces import (
@@ -45,6 +48,31 @@ def _version_payload() -> dict[str, Any]:
     return {
         "current": __version__,
     }
+
+
+_DOCS_STABLE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:\.post\d+)?$")
+_DOCS_LATEST_URL = "https://nanobot.wiki/docs/latest"
+
+
+def _docs_version(version: str) -> str:
+    """Map package versions to the matching public docs path."""
+    normalized = version.strip()
+    if _DOCS_STABLE_VERSION_RE.fullmatch(normalized):
+        return normalized
+    return "latest"
+
+
+def _docs_payload() -> dict[str, Any]:
+    """Return version-aware documentation links for the WebUI."""
+    docs_version = _docs_version(__version__)
+    base_url = f"https://nanobot.wiki/docs/{docs_version}"
+    return {
+        "version": docs_version,
+        "base_url": base_url,
+        "chat_apps_url": f"{base_url}/getting-started/chat-apps",
+        "latest_url": _DOCS_LATEST_URL,
+    }
+
 
 _RUNTIME_CAPABILITIES = {
     "can_restart_engine": False,
@@ -95,7 +123,12 @@ _IMAGE_GENERATION_ASPECT_RATIOS = {
     "2:3",
     "21:9",
 }
-_CONTEXT_WINDOW_TOKEN_OPTIONS = {65_536, 200_000, 262_144}
+_CONTEXT_WINDOW_TOKEN_OPTIONS = {65_536, 200_000, 262_144, 500_000, 1_048_576}
+_OAUTH_PROXY_PROVIDERS = {"openai_codex", "xai_grok"}
+_XAI_WEBUI_OAUTH_TIMEOUT_S = 600
+_XAI_WEBUI_OAUTH_MAX_FLOWS = 8
+_xai_webui_oauth_flows: dict[str, Any] = {}
+_xai_webui_oauth_flows_lock = threading.Lock()
 _MODEL_CONFIGURATION_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 _ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -278,6 +311,32 @@ def _oauth_provider_status(spec: Any) -> dict[str, Any]:
             "login_supported": True,
         }
 
+    if spec.name == "xai_grok":
+        try:
+            from nanobot.providers.xai_oauth import get_xai_oauth_login_status
+        except Exception:
+            return {
+                "configured": False,
+                "account": None,
+                "expires_at": None,
+                "login_supported": False,
+            }
+        token = None
+        with suppress(Exception):
+            token = get_xai_oauth_login_status()
+        expires_at = getattr(token, "expires", None) if token else None
+        now_ms = int(time.time() * 1000)
+        return {
+            "configured": bool(
+                token
+                and token.access
+                and (getattr(token, "refresh", None) or (expires_at and expires_at > now_ms))
+            ),
+            "account": getattr(token, "account_id", None) if token else None,
+            "expires_at": expires_at,
+            "login_supported": True,
+        }
+
     return {"configured": False, "account": None, "expires_at": None, "login_supported": False}
 
 
@@ -342,14 +401,49 @@ def _provider_settings_row(
         "api_base": provider_config.api_base,
         "default_api_base": spec.default_api_base or None,
         "model_selectable": not spec.is_transcription_only,
+        "model_catalog": _model_catalog_kind(spec),
     }
     if oauth_status is not None:
         row["oauth_account"] = oauth_status["account"]
         row["oauth_expires_at"] = oauth_status["expires_at"]
         row["oauth_login_supported"] = oauth_status["login_supported"]
+    if spec.name in _OAUTH_PROXY_PROVIDERS:
+        row["proxy"] = provider_config.proxy
     if spec.name == "openai":
         row["api_type"] = provider_config.api_type
     return row
+
+
+def _provider_settings_rows(config: Any, selected_provider: str | None) -> list[dict[str, Any]]:
+    """Return one Settings row per provider family while preserving legacy configs."""
+    aliases: dict[str, list[Any]] = {}
+    for spec in PROVIDERS:
+        if spec.settings_alias_for:
+            aliases.setdefault(spec.settings_alias_for, []).append(spec)
+
+    rows: list[dict[str, Any]] = []
+    for canonical in PROVIDERS:
+        if canonical.settings_alias_for:
+            continue
+        candidates = [canonical, *aliases.get(canonical.name, [])]
+        chosen = next((spec for spec in candidates if spec.name == selected_provider), None)
+        if chosen is None:
+            chosen = next(
+                (
+                    spec
+                    for spec in candidates
+                    if (provider_config := getattr(config.providers, spec.name, None)) is not None
+                    and _provider_configured_for_settings(spec, provider_config)
+                ),
+                canonical,
+            )
+        provider_config = getattr(config.providers, chosen.name, None)
+        if provider_config is None:
+            continue
+        row = _provider_settings_row(chosen.name, chosen, provider_config)
+        row["label"] = canonical.label
+        rows.append(row)
+    return rows
 
 
 def _model_catalog_kind(spec: Any) -> str:
@@ -404,20 +498,27 @@ def _model_row_payload(row: Any) -> dict[str, Any] | None:
     if not model_id:
         return None
     label: str | None = None
+    description: str | None = None
     owned_by: str | None = None
     if isinstance(row, dict):
         raw_label = row.get("display_name") or row.get("label") or row.get("name")
         if isinstance(raw_label, str) and raw_label.strip() and raw_label.strip() != model_id:
             label = raw_label.strip()
+        raw_description = row.get("description")
+        if isinstance(raw_description, str) and raw_description.strip():
+            description = raw_description.strip()
         raw_owner = row.get("owned_by") or row.get("owner") or row.get("organization")
         if isinstance(raw_owner, str) and raw_owner.strip():
             owned_by = raw_owner.strip()
-    return {
+    payload = {
         "id": model_id,
         "label": label,
         "owned_by": owned_by,
         "context_window": _model_context_window(row),
     }
+    if description:
+        payload["description"] = description
+    return payload
 
 
 def _extract_model_rows(body: Any) -> list[dict[str, Any]]:
@@ -467,6 +568,24 @@ def provider_models_payload(query: QueryParams) -> dict[str, Any]:
             **base_payload,
             "status": "unsupported",
             "message": "Model list is not available for this provider. Type a model ID manually.",
+        }
+
+    if catalog_kind == "builtin":
+        rows = [
+            {
+                "id": model.id,
+                "label": model.label or None,
+                "description": model.description or None,
+                "owned_by": spec.label,
+                "context_window": model.context_window,
+            }
+            for model in spec.builtin_models
+        ]
+        return {
+            **base_payload,
+            "status": "available",
+            "models": rows,
+            "model_count": len(rows),
         }
 
     api_base = _resolve_env_placeholders(provider_config.api_base) or spec.default_api_base
@@ -550,7 +669,9 @@ def _parse_context_window_tokens(value: str | None) -> int | None:
     except ValueError:
         raise WebUISettingsError("context_window_tokens must be an integer") from None
     if parsed not in _CONTEXT_WINDOW_TOKEN_OPTIONS:
-        raise WebUISettingsError("context_window_tokens must be 65536, 200000, or 262144")
+        raise WebUISettingsError(
+            "context_window_tokens must be 65536, 200000, 262144, 500000, or 1048576"
+        )
     return parsed
 
 
@@ -582,6 +703,7 @@ def _validate_configured_provider(config: Any, provider: str) -> None:
 def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for name in image_gen_provider_names():
+        image_provider = get_image_gen_provider(name)
         spec = find_by_name(name)
         provider_config = getattr(config.providers, name, None)
         configured = (
@@ -601,6 +723,12 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "api_base": getattr(provider_config, "api_base", None),
                 "default_api_base": (
                     spec.default_api_base if spec and spec.default_api_base else None
+                ),
+                "models": list(image_provider.model_options) if image_provider else [],
+                "default_model": (
+                    image_provider.model_options[0]
+                    if image_provider and image_provider.model_options
+                    else None
                 ),
             }
         )
@@ -622,6 +750,10 @@ def _reasoning_effort_values_for(provider_name: str, model: str) -> list[str]:
         return list(_DEFAULT_REASONING_EFFORT_VALUES)
 
     model_lower = (model or "").lower()
+    if model_lower.rsplit("/", 1)[-1] == "kimi-k3":
+        # K3 always reasons and currently exposes only its default/max effort.
+        return ["", "max"]
+
     implicit = getattr(spec, "implicit_reasoning_models", ())
     if implicit and any(pat in model_lower for pat in implicit):
         # Reasoning is always on; only "Default" makes sense.
@@ -668,11 +800,7 @@ def settings_payload(
     config = load_config()
     defaults = config.agents.defaults
     active_preset_name = defaults.model_preset or "default"
-    try:
-        effective_preset = config.resolve_preset()
-    except Exception:
-        effective_preset = config.resolve_default_preset()
-        active_preset_name = "default"
+    effective_preset = config.resolve_preset()
 
     provider_name = (
         config.get_provider_name(effective_preset.model, preset=effective_preset)
@@ -684,12 +812,7 @@ def settings_payload(
         spec = find_by_name(effective_preset.provider)
         selected_provider = spec.name if spec else provider_name
 
-    providers = []
-    for spec in PROVIDERS:
-        provider_config = getattr(config.providers, spec.name, None)
-        if provider_config is None:
-            continue
-        providers.append(_provider_settings_row(spec.name, spec, provider_config))
+    providers = _provider_settings_rows(config, selected_provider)
     for provider_key, provider_config in _dynamic_provider_items(config):
         providers.append(
             _provider_settings_row(
@@ -724,6 +847,10 @@ def settings_payload(
             "is_default": True,
             "model": defaults.model,
             "provider": defaults.provider,
+            "resolved_provider": config.get_provider_name(
+                defaults.model,
+                preset=config.resolve_default_preset(),
+            ),
             "max_tokens": defaults.max_tokens,
             "context_window_tokens": defaults.context_window_tokens,
             "temperature": defaults.temperature,
@@ -742,6 +869,10 @@ def settings_payload(
                 "is_default": False,
                 "model": preset.model,
                 "provider": preset.provider,
+                "resolved_provider": config.get_provider_name(
+                    preset.model,
+                    preset=preset,
+                ),
                 "max_tokens": preset.max_tokens,
                 "context_window_tokens": preset.context_window_tokens,
                 "temperature": preset.temperature,
@@ -794,6 +925,20 @@ def settings_payload(
             "fetch": {
                 "use_jina_reader": config.tools.web.fetch.use_jina_reader,
             },
+        },
+        "api": {
+            "host": config.api.host,
+            "port": config.api.port,
+            "timeout": config.api.timeout,
+            "api_key_hint": _mask_secret_hint(config.api.api_key),
+        },
+        "observability": {
+            "provider": "langfuse",
+            "configured": bool(
+                os.environ.get("LANGFUSE_SECRET_KEY")
+                and os.environ.get("LANGFUSE_PUBLIC_KEY")
+            ),
+            "base_url": os.environ.get("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com",
         },
         "image_generation": {
             "enabled": image_config.enabled,
@@ -850,6 +995,7 @@ def settings_payload(
         },
         "requires_restart": requires_restart,
         "version": _version_payload(),
+        "docs": _docs_payload(),
     }
     return decorate_settings_payload(
         payload,
@@ -1067,7 +1213,23 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         raise WebUISettingsError("unknown provider")
     spec, provider_key, provider_config = resolved_provider
     if spec.is_oauth:
-        raise WebUISettingsError("unknown provider")
+        if spec.name not in _OAUTH_PROXY_PROVIDERS:
+            raise WebUISettingsError("unknown provider")
+        if any(
+            key in query
+            for key in ("api_key", "apiKey", "api_base", "apiBase", "api_type")
+        ):
+            raise WebUISettingsError("OAuth provider only supports proxy settings")
+
+        changed = False
+        if "proxy" in query:
+            proxy = (_query_first(query, "proxy") or "").strip() or None
+            if provider_config.proxy != proxy:
+                provider_config.proxy = proxy
+                changed = True
+        if changed:
+            save_config(config)
+        return settings_payload()
 
     changed = False
     if "api_key" in query or "apiKey" in query:
@@ -1159,7 +1321,66 @@ def login_oauth_provider(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("OAuth login failed", status=401)
         return settings_payload()
 
+    if spec.name == "xai_grok":
+        from nanobot.providers.xai_oauth import start_xai_oauth_login
+
+        try:
+            proxy = resolve_config_env_vars(load_config()).providers.xai_grok.proxy or None
+        except ValueError as e:
+            raise WebUISettingsError(str(e), status=400) from e
+        try:
+            flow = start_xai_oauth_login(
+                proxy=proxy,
+                timeout_s=_XAI_WEBUI_OAUTH_TIMEOUT_S,
+            )
+        except Exception as e:
+            raise WebUISettingsError(f"xAI OAuth login failed: {e}", status=502) from e
+        flow_id = secrets.token_urlsafe(24)
+        _register_xai_webui_oauth_flow(flow_id, flow)
+        return {
+            "status": "authorization_required",
+            "provider": spec.name,
+            "flow_id": flow_id,
+            "authorization_url": flow.authorization_url,
+            "expires_in": flow.remaining_seconds,
+        }
+
     raise WebUISettingsError("OAuth login is not supported for this provider")
+
+
+def complete_oauth_provider(
+    query: QueryParams,
+    authorization_code: str | None = None,
+) -> dict[str, Any]:
+    provider_name = (_query_first(query, "provider") or "").strip()
+    flow_id = (_query_first(query, "flow_id") or "").strip()
+    spec = find_by_name(provider_name)
+    if spec is None or spec.name != "xai_grok":
+        raise WebUISettingsError("OAuth completion is not supported for this provider")
+    if not flow_id:
+        raise WebUISettingsError("flow_id is required")
+
+    flow = _get_xai_webui_oauth_flow(flow_id)
+    if flow is None:
+        raise WebUISettingsError("xAI sign-in expired. Start again.", status=410)
+
+    from nanobot.providers.xai_oauth import complete_xai_oauth_login
+
+    try:
+        token = complete_xai_oauth_login(flow, authorization_code)
+    except Exception as e:
+        _remove_xai_webui_oauth_flow(flow_id, flow)
+        raise WebUISettingsError(f"xAI OAuth login failed: {e}", status=502) from e
+    if token is None:
+        return {
+            "status": "pending",
+            "provider": spec.name,
+            "flow_id": flow_id,
+        }
+    _remove_xai_webui_oauth_flow(flow_id, flow, cancel=False)
+    if not token.access:
+        raise WebUISettingsError("OAuth login failed", status=401)
+    return settings_payload()
 
 
 def logout_oauth_provider(query: QueryParams) -> dict[str, Any]:
@@ -1187,6 +1408,12 @@ def logout_oauth_provider(query: QueryParams) -> dict[str, Any]:
                 "oauth_cli_kit not installed. Run: pip install oauth-cli-kit", status=500
             ) from None
         token_path = get_storage().get_token_path()
+    elif spec.name == "xai_grok":
+        from nanobot.providers.xai_oauth import logout_xai_oauth
+
+        _clear_xai_webui_oauth_flows()
+        logout_xai_oauth()
+        return settings_payload()
     else:
         raise WebUISettingsError("OAuth logout is not supported for this provider")
 
@@ -1194,6 +1421,51 @@ def logout_oauth_provider(query: QueryParams) -> dict[str, Any]:
         with suppress(FileNotFoundError):
             path.unlink()
     return settings_payload()
+
+
+def _register_xai_webui_oauth_flow(flow_id: str, flow: Any) -> None:
+    discarded: list[Any] = []
+    with _xai_webui_oauth_flows_lock:
+        for existing_id, existing in list(_xai_webui_oauth_flows.items()):
+            if existing.expired:
+                discarded.append(_xai_webui_oauth_flows.pop(existing_id))
+        while len(_xai_webui_oauth_flows) >= _XAI_WEBUI_OAUTH_MAX_FLOWS:
+            oldest_id = next(iter(_xai_webui_oauth_flows))
+            discarded.append(_xai_webui_oauth_flows.pop(oldest_id))
+        _xai_webui_oauth_flows[flow_id] = flow
+    for existing in discarded:
+        existing.cancel()
+
+
+def _get_xai_webui_oauth_flow(flow_id: str) -> Any | None:
+    with _xai_webui_oauth_flows_lock:
+        flow = _xai_webui_oauth_flows.get(flow_id)
+        if flow is None or not flow.expired:
+            return flow
+        _xai_webui_oauth_flows.pop(flow_id, None)
+    flow.cancel()
+    return None
+
+
+def _remove_xai_webui_oauth_flow(
+    flow_id: str,
+    flow: Any,
+    *,
+    cancel: bool = True,
+) -> None:
+    with _xai_webui_oauth_flows_lock:
+        if _xai_webui_oauth_flows.get(flow_id) is flow:
+            _xai_webui_oauth_flows.pop(flow_id)
+    if cancel:
+        flow.cancel()
+
+
+def _clear_xai_webui_oauth_flows() -> None:
+    with _xai_webui_oauth_flows_lock:
+        flows = list(_xai_webui_oauth_flows.values())
+        _xai_webui_oauth_flows.clear()
+    for flow in flows:
+        flow.cancel()
 
 
 def update_network_safety_settings(query: QueryParams) -> dict[str, Any]:
@@ -1315,6 +1587,49 @@ def update_web_search_settings(query: QueryParams) -> dict[str, Any]:
     if changed:
         save_config(config)
     return settings_payload(requires_restart=restart_required)
+
+
+def update_api_settings(query: QueryParams) -> dict[str, Any]:
+    """Update the managed OpenAI-compatible API configuration."""
+    config = load_config()
+    api = config.api
+
+    host = _query_first(query, "host")
+    if host is not None:
+        host = host.strip()
+        if not host:
+            raise WebUISettingsError("host is required")
+        api.host = host
+
+    port = _query_first(query, "port")
+    if port is not None:
+        try:
+            parsed_port = int(port)
+        except ValueError:
+            raise WebUISettingsError("port must be an integer") from None
+        if parsed_port < 1 or parsed_port > 65535:
+            raise WebUISettingsError("port must be between 1 and 65535")
+        api.port = parsed_port
+
+    timeout = _query_first(query, "timeout")
+    if timeout is not None:
+        try:
+            parsed_timeout = float(timeout)
+        except ValueError:
+            raise WebUISettingsError("timeout must be a number") from None
+        if parsed_timeout < 1 or parsed_timeout > 3600:
+            raise WebUISettingsError("timeout must be between 1 and 3600")
+        api.timeout = parsed_timeout
+
+    api_key = _query_first_alias(query, "api_key", "apiKey")
+    if api_key is not None:
+        api.api_key = api_key.strip()
+
+    if not is_loopback_host(api.host) and not api.api_key.strip():
+        raise WebUISettingsError("an API key is required when the API is available on the network")
+
+    save_config(config)
+    return settings_payload()
 
 
 def update_image_generation_settings(query: QueryParams) -> dict[str, Any]:

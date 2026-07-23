@@ -6,6 +6,8 @@ import asyncio
 import os
 import re
 import shutil
+import signal
+import subprocess
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
@@ -39,6 +41,30 @@ from nanobot.security.workspace_access import current_scope_allows_loopback, cur
 from nanobot.security.workspace_policy import is_path_within
 
 _IS_WINDOWS = sys.platform == "win32"
+
+
+def _reap_pid(pid: int) -> None:
+    """Best-effort ``waitpid`` to reap a child and prevent zombies.
+
+    Call this after killing or after normal completion of any subprocess
+    as a safety net — asyncio's child-watcher *should* have reaped it,
+    but in containers / edge-cases it sometimes doesn't.
+
+    Uses ``os`` capability checks rather than ``_IS_WINDOWS`` so this is
+    safe when tests patch the platform flag while still running on Windows
+    (``os.waitpid`` / ``os.WNOHANG`` do not exist there).
+    """
+    waitpid = getattr(os, "waitpid", None)
+    wnohang = getattr(os, "WNOHANG", None)
+    if waitpid is None or wnohang is None:
+        return
+    try:
+        waitpid(pid, wnohang)
+    except (ProcessLookupError, ChildProcessError):
+        # Already reaped, or not our child — both are fine.
+        pass
+    except OSError as exc:
+        logger.debug("_reap_pid({}): {}", pid, exc)
 
 
 # Policy note appended to recoverable workspace-boundary guard errors.
@@ -164,6 +190,7 @@ class ExecTool(Tool):
             allowed_env_keys=cfg.allowed_env_keys,
             allow_patterns=cfg.allow_patterns,
             deny_patterns=cfg.deny_patterns,
+            session_manager=getattr(ctx, "exec_session_manager", None),
         )
 
     def __init__(
@@ -283,6 +310,7 @@ class ExecTool(Tool):
         if yield_time_ms is not None:
             return await self._execute_session(prepared, yield_time_ms, max_output_chars)
 
+        process: asyncio.subprocess.Process | None = None
         try:
             process = await self._spawn(
                 prepared.command,
@@ -303,6 +331,11 @@ class ExecTool(Tool):
             except asyncio.CancelledError:
                 await self._kill_process(process)
                 raise
+
+            # Safety-net reap: asyncio *should* have reaped the child via
+            # communicate(), but in containers the child-watcher sometimes
+            # misses it, leaving a zombie.
+            _reap_pid(process.pid)
 
             output_parts = []
 
@@ -330,6 +363,10 @@ class ExecTool(Tool):
             return result
 
         except Exception as e:
+            # Kill and reap the child if it was spawned but an unexpected
+            # error prevented communicate() from completing.
+            if process is not None:
+                await self._kill_process(process)
             return ToolResult.error(f"Error executing command: {str(e)}")
 
     async def _execute_session(
@@ -481,6 +518,7 @@ class ExecTool(Tool):
         login: bool = False,
         *,
         stdin: int = asyncio.subprocess.DEVNULL,
+        process_tree: bool = False,
     ) -> asyncio.subprocess.Process:
         """Launch *command* in a platform-appropriate shell."""
         if _IS_WINDOWS:
@@ -501,7 +539,12 @@ class ExecTool(Tool):
                     env=cmd_env,
                 )
             command = ExecTool._normalize_powershell_command(command)
-            command = f"{command}\nif ($LASTEXITCODE -ne $null) {{ exit $LASTEXITCODE }}"
+            command = (
+                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+                "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'\n"
+                f"{command}\n"
+                "if ($LASTEXITCODE -ne $null) { exit $LASTEXITCODE }"
+            )
             return await asyncio.create_subprocess_exec(
                 program, "-NoProfile", "-NonInteractive", "-Command", command,
                 stdin=stdin,
@@ -523,6 +566,7 @@ class ExecTool(Tool):
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=env,
+            **({"start_new_session": True} if process_tree else {}),
         )
 
     @staticmethod
@@ -598,17 +642,55 @@ class ExecTool(Tool):
 
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
-        """Kill a subprocess and reap it to prevent zombies."""
-        process.kill()
+        """Kill a subprocess and reap it to prevent zombies.
+
+        Safe to call when the process has already exited (e.g. generic
+        exception handlers after a successful ``communicate()``): skips
+        ``kill()`` and only runs the safety-net reap.
+        """
+        if process.returncode is not None:
+            _reap_pid(process.pid)
+            return
         try:
+            with suppress(ProcessLookupError):
+                process.kill()
             with suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(process.wait(), timeout=5.0)
         finally:
-            if not _IS_WINDOWS:
+            _reap_pid(process.pid)
+
+    @staticmethod
+    async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
+        """Kill a session process and descendants, then reap the root process."""
+        if process.returncode is not None:
+            _reap_pid(process.pid)
+            return
+        try:
+            if _IS_WINDOWS:
+                with suppress(OSError, asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            subprocess.run,
+                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                            check=False,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        ),
+                        timeout=5.0,
+                    )
+            else:
                 try:
-                    os.waitpid(process.pid, os.WNOHANG)
-                except (ProcessLookupError, ChildProcessError) as e:
-                    logger.debug("Process already reaped or not found: {}", e)
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+        finally:
+            _reap_pid(process.pid)
 
     def _build_env(self) -> dict[str, str]:
         """Build a minimal environment for subprocess execution.
@@ -673,9 +755,12 @@ class ExecTool(Tool):
 
         # allow_patterns take priority over deny_patterns so that users can
         # exempt specific commands (e.g. "rm -rf" inside a build directory)
-        # from the hardcoded deny list via configuration.
-        explicitly_allowed = bool(self.allow_patterns) and any(
-            re.fullmatch(p, lower) for p in self.allow_patterns
+        # from the hardcoded deny list via configuration. A chained command is
+        # only explicitly allowed when every top-level shell segment matches.
+        segments = self._split_shell_segments(lower)
+        explicitly_allowed = bool(self.allow_patterns) and bool(segments) and all(
+            any(re.fullmatch(pattern, segment) for pattern in self.allow_patterns)
+            for segment in segments
         )
         if not explicitly_allowed:
             for pattern in self.deny_patterns:
@@ -739,6 +824,84 @@ class ExecTool(Tool):
                     )
 
         return None
+
+    @staticmethod
+    def _split_shell_segments(command: str) -> list[str]:
+        """Split shell commands on top-level chaining operators."""
+        segments: list[str] = []
+        current: list[str] = []
+        quote: str | None = None
+        escaped = False
+        paren_depth = 0
+        i = 0
+
+        while i < len(command):
+            ch = command[i]
+
+            if escaped:
+                current.append(ch)
+                escaped = False
+                i += 1
+                continue
+
+            if ch == "\\" and quote != "'":
+                current.append(ch)
+                escaped = True
+                i += 1
+                continue
+
+            if quote is not None:
+                current.append(ch)
+                if ch == quote:
+                    quote = None
+                i += 1
+                continue
+
+            if ch in {"'", '"', "`"}:
+                current.append(ch)
+                quote = ch
+                i += 1
+                continue
+
+            if ch == "(":
+                paren_depth += 1
+                current.append(ch)
+                i += 1
+                continue
+
+            if ch == ")" and paren_depth > 0:
+                paren_depth -= 1
+                current.append(ch)
+                i += 1
+                continue
+
+            operator_len = 0
+            if paren_depth == 0:
+                if command.startswith(("&&", "||"), i):
+                    operator_len = 2
+                elif ch == "&" and not (
+                    (i > 0 and command[i - 1] in "<>") or command.startswith("&>", i)
+                ):
+                    current.append(ch)
+                    operator_len = 1
+                elif ch in {";", "|"}:
+                    operator_len = 1
+
+            if operator_len:
+                segment = "".join(current).strip()
+                if segment:
+                    segments.append(segment)
+                current = []
+                i += operator_len
+                continue
+
+            current.append(ch)
+            i += 1
+
+        segment = "".join(current).strip()
+        if segment:
+            segments.append(segment)
+        return segments
 
     @classmethod
     def _is_benign_device_path(cls, path: str) -> bool:

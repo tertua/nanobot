@@ -357,6 +357,30 @@ describe("NanobotClient", () => {
     expect(handler).toHaveBeenCalledWith("openai/gpt-4.1", "fast");
   });
 
+  it("dispatches turn model updates to the active chat", () => {
+    const client = new NanobotClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    const chatHandler = vi.fn();
+    client.onChat("chat-a", chatHandler);
+    client.connect();
+    lastSocket().fakeOpen();
+
+    lastSocket().fakeMessage({
+      event: "turn_model_updated",
+      chat_id: "chat-a",
+      model_name: "deepseek/deepseek-chat",
+    });
+
+    expect(chatHandler).toHaveBeenCalledWith({
+      event: "turn_model_updated",
+      chat_id: "chat-a",
+      model_name: "deepseek/deepseek-chat",
+    });
+  });
+
   it("dispatches session updates globally", () => {
     const client = new NanobotClient({
       url: "ws://test",
@@ -528,7 +552,7 @@ describe("NanobotClient", () => {
     });
   });
 
-  it("includes image generation options in outbound messages", () => {
+  it("sends selected assistant text as separate quoted context", () => {
     const client = new NanobotClient({
       url: "ws://test",
       reconnect: false,
@@ -537,22 +561,17 @@ describe("NanobotClient", () => {
     client.connect();
     lastSocket().fakeOpen();
 
-    client.sendMessage(
-      "chat-img",
-      "draw a banner",
-      undefined,
-      { imageGeneration: { enabled: true, aspect_ratio: "16:9" } },
-    );
+    client.sendMessage("chat-x", "What does this mean?", undefined, {
+      quotedContext: "  selected answer excerpt  ",
+    });
 
-    expect(lastSocket().sent).toContain(
-      JSON.stringify({
-        type: "message",
-        chat_id: "chat-img",
-        content: "draw a banner",
-        image_generation: { enabled: true, aspect_ratio: "16:9" },
-        webui: true,
-      }),
-    );
+    expect(JSON.parse(lastSocket().sent.at(-1) as string)).toEqual({
+      type: "message",
+      chat_id: "chat-x",
+      content: "What does this mean?",
+      quoted_context: "selected answer excerpt",
+      webui: true,
+    });
   });
 
   it("includes CLI app attachments in outbound messages", () => {

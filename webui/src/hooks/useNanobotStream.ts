@@ -13,12 +13,11 @@ import type { StreamError } from "@/lib/nanobot-client";
 import type {
   InboundEvent,
   OutboundCliAppMention,
-  OutboundImageGeneration,
   OutboundMcpPresetMention,
   OutboundMedia,
   GoalStateWsPayload,
   ToolProgressEvent,
-  UIImage,
+  UIMediaAttachment,
   UIFileEdit,
   UIMessage,
   UITurnPhase,
@@ -43,6 +42,7 @@ type UIMessageTurnFields = Pick<UIMessage, "turnId" | "turnPhase" | "turnSeq">;
 
 const FILE_EDIT_TOOL_NAMES = new Set(["write_file", "edit_file", "apply_patch"]);
 const STREAM_END_IDLE_DELAY_MS = 1000;
+const BACKGROUND_STREAM_FLUSH_INTERVAL_MS = 1_000;
 
 function turnFieldsFromEvent(
   ev: { turn_id?: string; turn_phase?: UITurnPhase; turn_seq?: number },
@@ -465,24 +465,26 @@ function findFileEditTraceIndex(
  * separately (e.g. via ``fetchWebuiThread``) since the server only replays
  * live events.
  */
-/** Payload passed to ``send`` when the user attaches one or more images.
+/** Payload passed to ``send`` when the user attaches one or more files.
  *
  * ``media`` is handed to the wire client verbatim; ``preview`` powers the
- * optimistic user bubble (blob URLs so the preview appears before the server
- * acks the frame). Keeping the two separate lets the bubble re-use the local
- * blob URL even after the server persists the file under a different name. */
-export interface SendImage {
+ * optimistic user bubble. Keeping the two separate lets the bubble re-use the
+ * local data URL even after the server persists the file under a different
+ * name. */
+export interface SendAttachment {
   media: OutboundMedia;
-  preview: UIImage;
+  preview: UIMediaAttachment;
 }
 
 export interface SendOptions {
-  imageGeneration?: OutboundImageGeneration;
   cliApps?: OutboundCliAppMention[];
   mcpPresets?: OutboundMcpPresetMention[];
+  quotedContext?: string;
   workspaceScope?: WorkspaceScopePayload | null;
   sideChannel?: boolean;
   finalizeActiveTurn?: boolean;
+  /** Append guidance to the running turn without detaching its active answer segment. */
+  continueActiveTurn?: boolean;
 }
 
 function eventExtendsModelActivity(ev: InboundEvent): boolean {
@@ -522,7 +524,7 @@ export function useNanobotStream(
   runStartedAt: number | null;
   /** Latest sustained goal for this ``chatId`` (``goal_state`` WS events). */
   goalState: GoalStateWsPayload | undefined;
-  send: (content: string, images?: SendImage[], options?: SendOptions) => void;
+  send: (content: string, images?: SendAttachment[], options?: SendOptions) => void;
   transcribeAudio: (dataUrl: string, options?: { durationMs?: number }) => Promise<string>;
   stop: () => void;
   setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
@@ -550,6 +552,7 @@ export function useNanobotStream(
   const activitySegmentCounterRef = useRef(0);
   const pendingStreamEventsRef = useRef<PendingStreamEvent[]>([]);
   const streamFrameRef = useRef<number | null>(null);
+  const streamTimerRef = useRef<number | null>(null);
   const suppressStreamUntilTurnEndRef = useRef(false);
   const sideChannelTurnIdsRef = useRef<Set<string>>(new Set());
   /** Timer that defers ``isStreaming = false`` after ``stream_end``.
@@ -571,6 +574,10 @@ export function useNanobotStream(
     if (streamFrameRef.current !== null) {
       window.cancelAnimationFrame(streamFrameRef.current);
       streamFrameRef.current = null;
+    }
+    if (streamTimerRef.current !== null) {
+      window.clearTimeout(streamTimerRef.current);
+      streamTimerRef.current = null;
     }
     pendingStreamEventsRef.current = [];
   }, []);
@@ -736,6 +743,10 @@ export function useNanobotStream(
       window.cancelAnimationFrame(streamFrameRef.current);
       streamFrameRef.current = null;
     }
+    if (streamTimerRef.current !== null) {
+      window.clearTimeout(streamTimerRef.current);
+      streamTimerRef.current = null;
+    }
     const events = pendingStreamEventsRef.current;
     const finalAnswerText = options?.finalAnswerText;
     const turn = options?.turn ?? {};
@@ -750,37 +761,47 @@ export function useNanobotStream(
         const targetIndex =
           resolveActiveAssistantIndex(next, turn)
           ?? findStreamingAssistantIndex(next, closedAssistantStreamIdsRef.current, turn);
-          if (targetIndex !== null) {
-            const target = next[targetIndex];
-            next = replaceMessageAt(next, targetIndex, {
-              ...target,
+        if (targetIndex !== null) {
+          const target = next[targetIndex];
+          next = replaceMessageAt(next, targetIndex, {
+            ...target,
+            content: finalAnswerText,
+            isStreaming: true,
+            ...turn,
+          });
+        } else {
+          const id = crypto.randomUUID();
+          closedAssistantStreamIdsRef.current.add(id);
+          next = [
+            ...next,
+            {
+              id,
+              role: "assistant",
               content: finalAnswerText,
               isStreaming: true,
               ...turn,
-            });
-          } else {
-            const id = crypto.randomUUID();
-            closedAssistantStreamIdsRef.current.add(id);
-            next = [
-              ...next,
-              {
-                id,
-                role: "assistant",
-                content: finalAnswerText,
-                isStreaming: true,
-                ...turn,
-                createdAt: Date.now(),
-              },
-            ];
-          }
+              createdAt: Date.now(),
+            },
+          ];
         }
+      }
       if (options?.closeAnswerSegment) closeActiveAssistantStream();
       return next;
     });
   }, [applyPendingStreamEvents, closeActiveAssistantStream, resolveActiveAssistantIndex]);
 
   const schedulePendingStreamFlush = useCallback(() => {
-    if (streamFrameRef.current !== null) return;
+    if (streamFrameRef.current !== null || streamTimerRef.current !== null) return;
+    if (document.visibilityState === "hidden") {
+      streamTimerRef.current = window.setTimeout(() => {
+        streamTimerRef.current = null;
+        const events = pendingStreamEventsRef.current;
+        if (events.length === 0) return;
+        pendingStreamEventsRef.current = [];
+        setMessages((prev) => applyPendingStreamEvents(prev, events));
+      }, BACKGROUND_STREAM_FLUSH_INTERVAL_MS);
+      return;
+    }
     streamFrameRef.current = window.requestAnimationFrame(() => {
       streamFrameRef.current = null;
       const events = pendingStreamEventsRef.current;
@@ -789,6 +810,16 @@ export function useNanobotStream(
       setMessages((prev) => applyPendingStreamEvents(prev, events));
     });
   }, [applyPendingStreamEvents]);
+
+  useEffect(() => {
+    const flushOnReturn = () => {
+      if (document.visibilityState !== "visible") return;
+      if (pendingStreamEventsRef.current.length === 0) return;
+      flushPendingStreamEvents();
+    };
+    document.addEventListener("visibilitychange", flushOnReturn);
+    return () => document.removeEventListener("visibilitychange", flushOnReturn);
+  }, [flushPendingStreamEvents]);
 
   // Reset local state when switching chats. Do not reset on every
   // ``initialMessages`` update: a brand-new chat can receive an empty/404
@@ -865,6 +896,12 @@ export function useNanobotStream(
           turn,
         });
         if (suppressStreamUntilTurnEndRef.current) return;
+        if (ev.resuming) {
+          cancelStreamEndTimer();
+          setIsStreaming(true);
+          setMessages((prev) => finalizeStreamedTurn(prev, turn));
+          return;
+        }
         scheduleStreamEndTimer(turn);
         return;
       }
@@ -1137,15 +1174,16 @@ export function useNanobotStream(
   ]);
 
   const send = useCallback(
-    (content: string, images?: SendImage[], options?: SendOptions) => {
+    (content: string, images?: SendAttachment[], options?: SendOptions) => {
       if (!chatId) return;
-      const hasImages = !!images && images.length > 0;
-      // Text is optional when images are attached — the agent will still see
-      // the image blocks via ``media`` paths.
-      if (!hasImages && !content.trim()) return;
+      const hasAttachments = !!images && images.length > 0;
+      // Text is optional when files are attached — the agent will still see
+      // them via ``media`` paths.
+      if (!hasAttachments && !content.trim()) return;
 
       const sideChannel = options?.sideChannel === true;
       const finalizeActiveTurn = options?.finalizeActiveTurn === true;
+      const continueActiveTurn = options?.continueActiveTurn === true;
       flushPendingStreamEvents();
       if (finalizeActiveTurn) {
         cancelStreamEndTimer();
@@ -1153,18 +1191,23 @@ export function useNanobotStream(
       }
       const turnId = crypto.randomUUID();
       if (sideChannel) sideChannelTurnIdsRef.current.add(turnId);
-      const previews = hasImages ? images!.map((i) => i.preview) : undefined;
+      const previews = hasAttachments ? images!.map((i) => i.preview) : undefined;
       setMessages((prev) => {
-        if (!sideChannel || finalizeActiveTurn) {
+        if ((!sideChannel && !continueActiveTurn) || finalizeActiveTurn) {
           buffer.current = null;
           activeAssistantRef.current = null;
           closedAssistantStreamIdsRef.current.clear();
           clearActivitySegment();
           suppressStreamUntilTurnEndRef.current = false;
+        } else if (continueActiveTurn) {
+          // Guidance belongs to the active backend turn. Preserve the answer
+          // cursor so its resuming stream_end can finalize the text already
+          // shown before the new user row, while starting fresh activity after it.
+          clearActivitySegment();
         }
         const base = finalizeActiveTurn ? finalizeStreamedTurn(prev) : prev;
         return [
-          ...(sideChannel ? base : pruneReasoningOnlyPlaceholders(base)),
+          ...(sideChannel || continueActiveTurn ? base : pruneReasoningOnlyPlaceholders(base)),
           {
             id: crypto.randomUUID(),
             role: "user",
@@ -1173,7 +1216,7 @@ export function useNanobotStream(
             turnPhase: "user",
             turnSeq: 0,
             createdAt: Date.now(),
-            ...(previews ? { images: previews } : {}),
+            ...(previews ? { media: previews } : {}),
             ...(options?.cliApps?.length ? { cliApps: options.cliApps } : {}),
             ...(options?.mcpPresets?.length ? { mcpPresets: options.mcpPresets } : {}),
           },
@@ -1183,10 +1226,11 @@ export function useNanobotStream(
         setIsStreaming(true);
         setRunStartedAt(Math.floor(Date.now() / 1000));
       }
-      const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
+      const wireMedia = hasAttachments ? images!.map((i) => i.media) : undefined;
       const wireOptions = { ...options, turnId };
       delete wireOptions.sideChannel;
       delete wireOptions.finalizeActiveTurn;
+      delete wireOptions.continueActiveTurn;
       client.sendMessage(chatId, content, wireMedia, wireOptions);
     },
     [cancelStreamEndTimer, chatId, clearActivitySegment, client, flushPendingStreamEvents],

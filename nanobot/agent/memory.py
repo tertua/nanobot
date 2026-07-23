@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 
-from nanobot.session.manager import Session
+from nanobot.runtime_context import public_history_messages
+from nanobot.session.manager import Session, SessionManager
 from nanobot.utils.gitstore import GitStore
 from nanobot.utils.helpers import (
     ensure_dir,
@@ -28,9 +29,14 @@ from nanobot.utils.helpers import (
     truncate_text_to_tokens,
 )
 from nanobot.utils.prompt_templates import render_template
+from nanobot.utils.workspace_prompts import (
+    WORKSPACE_PROMPT_MAX_CHARS,
+    has_workspace_prompt_override,
+    load_workspace_prompt_override,
+    workspace_prompt_file,
+)
 
 if TYPE_CHECKING:
-    from nanobot.session.manager import SessionManager
     from nanobot.utils.llm_runtime import LLMRuntime
 
 # ---------------------------------------------------------------------------
@@ -492,14 +498,10 @@ class MemoryStore:
 
     @property
     def dream_prompt_file(self) -> Path:
-        return self.workspace / "prompts" / "dream.md"
+        return workspace_prompt_file(self.workspace, "dream")
 
     def has_dream_prompt_override(self) -> bool:
-        with suppress(OSError):
-            return self.dream_prompt_file.is_file() and bool(
-                self.dream_prompt_file.read_text(encoding="utf-8").strip()
-            )
-        return False
+        return has_workspace_prompt_override(self.dream_prompt_file)
 
     @staticmethod
     def default_dream_prompt() -> str:
@@ -512,20 +514,19 @@ class MemoryStore:
         )
 
     def _dream_template(self) -> str:
-        with suppress(OSError):
-            text = self.dream_prompt_file.read_text(encoding="utf-8")
-            if text.strip():
-                text = text.rstrip()
-                if len(text) > _DREAM_PROMPT_MAX_CHARS:
-                    if not self._dream_prompt_oversize_logged:
-                        self._dream_prompt_oversize_logged = True
-                        logger.warning(
-                            "workspace Dream prompt exceeds {} chars ({}); truncating. "
-                            "Further occurrences suppressed.",
-                            _DREAM_PROMPT_MAX_CHARS, len(text),
-                        )
-                    return truncate_text(text, _DREAM_PROMPT_MAX_CHARS)
-                return text
+        text, original_chars = load_workspace_prompt_override(self.dream_prompt_file)
+        if text is not None:
+            if (
+                original_chars > WORKSPACE_PROMPT_MAX_CHARS
+                and not self._dream_prompt_oversize_logged
+            ):
+                self._dream_prompt_oversize_logged = True
+                logger.warning(
+                    "workspace Dream prompt exceeds {} chars ({}); truncating. "
+                    "Further occurrences suppressed.",
+                    WORKSPACE_PROMPT_MAX_CHARS, original_chars,
+                )
+            return text
         return self.default_dream_prompt()
 
     def build_dream_prompt(self, *, max_entries: int = 20) -> tuple[str, int] | None:
@@ -660,7 +661,10 @@ class MemoryStore:
     ) -> None:
         """Fallback: dump raw messages to history.jsonl without LLM summarization."""
         limit = max_chars if max_chars is not None else _RAW_ARCHIVE_MAX_CHARS
-        formatted = truncate_text(self._format_messages(messages), limit)
+        formatted = truncate_text(
+            self._format_messages(public_history_messages(messages)),
+            limit,
+        )
         self.append_history(
             f"[RAW] {len(messages)} messages\n"
             f"{formatted}",
@@ -701,12 +705,15 @@ class MemoryStore:
     def prune_dream_sessions(sessions_dir: Path, *, keep: int = 10) -> None:
         """Remove the oldest Dream session files, keeping only the N most recent.
 
-        Only files matching ``dream_*.jsonl`` are considered. Non-dream session
-        files are never touched.
+        Only current base64url-encoded Dream session keys are considered.
+        Non-dream session files are never touched.
         """
-        dream_files = sorted(
-            sessions_dir.glob("dream_*.jsonl"), key=lambda p: p.stat().st_mtime,
-        )
+        dream_files = []
+        for path in sessions_dir.glob("*.jsonl"):
+            decoded_key = SessionManager._decode_storage_key(path.stem)
+            if decoded_key is not None and decoded_key.startswith("dream:"):
+                dream_files.append(path)
+        dream_files.sort(key=lambda p: p.stat().st_mtime)
         if len(dream_files) <= keep:
             return
 
@@ -728,7 +735,6 @@ class MemoryStore:
 # that catches any new caller that forgot to set its own cap.
 _RAW_ARCHIVE_MAX_CHARS = 16_000       # fallback dump (LLM failed)
 _ARCHIVE_SUMMARY_MAX_CHARS = 8_000    # LLM-produced consolidation summary
-_DREAM_PROMPT_MAX_CHARS = 32_000      # workspace-local Dream prompt override
 _HISTORY_ENTRY_HARD_CAP = 64_000      # emergency cap in append_history
 
 
@@ -932,19 +938,22 @@ class Consolidator:
         """
         if not messages:
             return None
-        messages_to_summarize = summary_messages if summary_messages is not None else messages
+        messages_to_summarize = public_history_messages(
+            summary_messages if summary_messages is not None else messages
+        )
+        formatted = MemoryStore._format_messages(messages_to_summarize)
+        formatted = self._truncate_to_token_budget(formatted, runtime=runtime)
+        system_prompt = render_template(
+            "agent/consolidator_archive.md",
+            strip=True,
+        )
         try:
-            formatted = MemoryStore._format_messages(messages_to_summarize)
-            formatted = self._truncate_to_token_budget(formatted, runtime=runtime)
             response = await runtime.provider.chat_with_retry(
                 model=runtime.model,
                 messages=[
                     {
                         "role": "system",
-                        "content": render_template(
-                            "agent/consolidator_archive.md",
-                            strip=True,
-                        ),
+                        "content": system_prompt,
                     },
                     {"role": "user", "content": formatted},
                 ],
@@ -954,19 +963,21 @@ class Consolidator:
                 max_tokens=runtime.generation.max_tokens,
                 reasoning_effort=runtime.generation.reasoning_effort,
             )
-            if response.finish_reason == "error":
-                raise RuntimeError(f"LLM returned error: {response.content}")
-            summary = response.content or "[no summary]"
-            self.store.append_history(
-                summary,
-                max_chars=_ARCHIVE_SUMMARY_MAX_CHARS,
-                session_key=session_key,
-            )
-            return summary
         except Exception:
-            logger.warning("Consolidation LLM call failed, raw-dumping to history")
+            logger.warning("Consolidation provider call failed, raw-dumping to history")
             self.store.raw_archive(messages, session_key=session_key)
             return None
+        if response.finish_reason == "error":
+            logger.warning("Consolidation provider returned an error, raw-dumping to history")
+            self.store.raw_archive(messages, session_key=session_key)
+            return None
+        summary = response.content or "[no summary]"
+        self.store.append_history(
+            summary,
+            max_chars=_ARCHIVE_SUMMARY_MAX_CHARS,
+            session_key=session_key,
+        )
+        return summary
 
     async def maybe_consolidate_by_tokens(
         self,
@@ -999,14 +1010,10 @@ class Consolidator:
                 replay_max_messages,
                 runtime=runtime,
             )
-            try:
-                estimated, source = self.estimate_session_prompt_tokens(
-                    session,
-                    runtime=runtime,
-                )
-            except Exception:
-                logger.exception("Token estimation failed for {}", session.key)
-                estimated, source = 0, "error"
+            estimated, source = self.estimate_session_prompt_tokens(
+                session,
+                runtime=runtime,
+            )
             if estimated <= 0:
                 self._persist_last_summary(session, last_summary)
                 return
@@ -1069,14 +1076,10 @@ class Consolidator:
                     # the next invocation can retry a fresh chunk.
                     break
 
-                try:
-                    estimated, source = self.estimate_session_prompt_tokens(
-                        session,
-                        runtime=runtime,
-                    )
-                except Exception:
-                    logger.exception("Token estimation failed for {}", session.key)
-                    estimated, source = 0, "error"
+                estimated, source = self.estimate_session_prompt_tokens(
+                    session,
+                    runtime=runtime,
+                )
                 if estimated <= 0:
                     break
 

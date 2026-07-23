@@ -249,6 +249,8 @@ describe("App layout", () => {
     localStorage.removeItem("nanobot-webui.sidebar");
     localStorage.removeItem("nanobot-webui.sidebar.completed-runs.v1");
     localStorage.removeItem("nanobot-webui.sidebar.session-updates.v1");
+    localStorage.removeItem("nanobot-webui.restartStartedAt");
+    localStorage.removeItem("nanobot-webui.restartRoute");
     vi.mocked(fetchBootstrap).mockReset().mockResolvedValue({
       token: "tok",
       api_token: "api-tok",
@@ -341,6 +343,35 @@ describe("App layout", () => {
       skillsButton.compareDocumentPosition(automationsButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("restores the Settings route after a restart fallback hash", async () => {
+    localStorage.setItem("nanobot-webui.restartStartedAt", String(Date.now()));
+    localStorage.setItem("nanobot-webui.restartRoute", "#/settings?section=channels");
+    window.history.replaceState(null, "", "/#/new");
+    mockFetchRoutes({
+      "/api/settings": baseSettingsPayload(),
+      "/api/settings/nanobot-features": {
+        features: [{
+          name: "websocket",
+          display_name: "Websocket",
+          type: "channel",
+          enabled: true,
+          installed: true,
+          ready: true,
+          status: "enabled",
+          install_supported: true,
+          requires_restart: true,
+        }],
+        enabled_count: 1,
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    expect((await screen.findAllByRole("heading", { name: "Channels" })).length).toBeGreaterThan(0);
+    expect(window.location.hash).toBe("#/settings?section=channels");
   });
 
   it("opens Skills from the main sidebar", async () => {
@@ -1577,8 +1608,8 @@ describe("App layout", () => {
     expect(screen.queryByTestId("overview-logo-nanobot-workspace")).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Sidebar navigation" })).not.toBeInTheDocument();
     const settingsNav = screen.getByRole("navigation", { name: "Settings sections" });
-    expect(settingsNav.className).toContain("overflow-x-auto");
-    expect(settingsNav.className).not.toContain("grid-cols-2");
+    expect(settingsNav.className).not.toContain("overflow-x-auto");
+    expect(within(settingsNav).getByRole("button", { name: "Settings: Overview" })).toBeInTheDocument();
     expect(within(settingsNav).getByRole("button", { name: "Overview" })).toHaveAttribute(
       "aria-current",
       "page",
@@ -1586,14 +1617,18 @@ describe("App layout", () => {
     expect(within(settingsNav).getByRole("button", { name: "Models" })).toBeInTheDocument();
     expect(within(settingsNav).queryByRole("button", { name: "Providers" })).not.toBeInTheDocument();
     expect(within(settingsNav).getByRole("button", { name: "Image" })).toBeInTheDocument();
+    expect(within(settingsNav).queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
     expect(within(settingsNav).getByRole("button", { name: "Web" })).toBeInTheDocument();
     expect(within(settingsNav).queryByRole("button", { name: "Apps" })).not.toBeInTheDocument();
     expect(within(settingsNav).getByRole("button", { name: "Security" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
-    fireEvent.click(within(settingsNav).getByRole("button", { name: "Appearance" }));
+    fireEvent.pointerDown(within(settingsNav).getByRole("button", { name: "Settings: Overview" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Appearance" }));
     expect(screen.getByText("Brand logos")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Brand logos" })).toBeInTheDocument();
-    fireEvent.click(within(settingsNav).getByRole("button", { name: "Models" }));
+    expect(within(settingsNav).getByRole("button", { name: "Settings: Appearance" })).toBeInTheDocument();
+    fireEvent.pointerDown(within(settingsNav).getByRole("button", { name: "Settings: Appearance" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Models" }));
     expect(screen.queryByText("AI")).not.toBeInTheDocument();
     expect(screen.getByText("Current configuration")).toBeInTheDocument();
     expect(screen.queryByText("Presets")).not.toBeInTheDocument();
@@ -1658,7 +1693,7 @@ describe("App layout", () => {
     expect(screen.getByRole("heading", { name: "Image" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Image generation" })).toBeInTheDocument();
     expect(screen.getByText("Provider status")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("openai/gpt-5.4-image-2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "openai/gpt-5.4-image-2" })).toBeInTheDocument();
     expect(screen.getByText("Save directory")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
@@ -1706,6 +1741,16 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     expect(await screen.findByRole("heading", { name: "Voice input" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/settings?section=voice");
+  });
+
+  it("falls back to Overview for the retired Files settings URL", async () => {
+    mockFetchRoutes({ "/api/settings": baseSettingsPayload() });
+    window.history.replaceState(null, "", "/#/settings?section=files");
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
   });
 
   it("updates the URL hash when switching settings sections", async () => {

@@ -3,6 +3,7 @@ import {
   useEffect,
   forwardRef,
   useMemo,
+  useRef,
   useState,
   type Dispatch,
   type FormEvent,
@@ -36,6 +37,7 @@ import {
   Layers,
   Loader2,
   LogOut,
+  MessageCircle,
   Mic,
   Moon,
   PauseCircle,
@@ -59,9 +61,22 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { channelUiPresentation } from "@/channel-plugins/registry";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { SkillsCatalogSettings } from "@/components/settings/SkillsCatalogSettings";
 import { TokenUsageHeatmap } from "@/components/settings/TokenUsageHeatmap";
+import { ToggleButton } from "@/components/settings/ToggleButton";
+import {
+  channelIsRunning,
+  channelMatchesFilter,
+  channelSearchText,
+  localizedChannelDisplayName,
+  type ChannelFilter,
+} from "@/components/settings/channels/ChannelIdentity";
+import {
+  ChannelCatalogRow,
+  ChannelSetupPanel,
+} from "@/components/settings/channels/ChannelSetupPanel";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -80,11 +95,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { isLoopbackHost } from "@/lib/network";
 import {
   checkVersion,
+  completeProviderOAuth,
   createModelConfiguration,
   disableNanobotFeature,
   enableNanobotFeature,
+  fetchApiService,
   fetchAutomations,
   fetchSettings,
   fetchSettingsUsage,
@@ -99,6 +117,8 @@ import {
   runCliAppAction,
   runMcpPresetAction,
   saveCustomMcpServer,
+  startApiService,
+  stopApiService,
   updateAutomation,
   updateImageGenerationSettings,
   updateMcpServerTools,
@@ -119,10 +139,14 @@ import {
   type LocalDensity,
   type LocalPreferences,
 } from "@/lib/local-preferences";
-import { getHostApi } from "@/lib/runtime";
+import { getRuntimeHost, isNativeRuntime } from "@/lib/runtime";
 import { notifyMcpPresetsChanged } from "@/lib/mcp-preset-events";
 import { fmtDateTime, relativeTime } from "@/lib/format";
+import { useLogoFallback } from "@/hooks/useLogoFallback";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { usePageVisibility } from "@/hooks/usePageVisibility";
 import {
+  isGenericRepositoryLogoUrl,
   logoFallbackUrls,
   providerBrand,
   providerDisplayLabel,
@@ -131,6 +155,7 @@ import { cn } from "@/lib/utils";
 import { shortWorkspacePath } from "@/lib/workspace";
 import { useClient } from "@/providers/ClientProvider";
 import type {
+  ApiServicePayload,
   AutomationsPayload,
   AutomationUpdatePayload,
   CliAppInfo,
@@ -142,6 +167,10 @@ import type {
   NanobotFeaturesPayload,
   NetworkSafetySettingsUpdate,
   ProviderModelsPayload,
+  ProviderOAuthAuthorizationRequired,
+  ProviderOAuthCompletionResult,
+  ProviderOAuthLoginResult,
+  ProviderOAuthPending,
   SessionAutomationJob,
   SettingsPayload,
   SkillSummary,
@@ -157,18 +186,30 @@ export type SettingsSectionKey =
   | "image"
   | "voice"
   | "browser"
+  | "channels"
   | "apps"
   | "automations"
   | "skills"
   | "runtime"
   | "advanced";
 
-type AppsKindFilter = "all" | "nanobot" | "cli" | "mcp";
+function isProviderOAuthAuthorizationRequired(
+  payload: ProviderOAuthLoginResult,
+): payload is ProviderOAuthAuthorizationRequired {
+  return (payload as ProviderOAuthAuthorizationRequired).status === "authorization_required";
+}
+
+function isProviderOAuthPending(
+  payload: ProviderOAuthCompletionResult,
+): payload is ProviderOAuthPending {
+  return (payload as ProviderOAuthPending).status === "pending";
+}
+
+type AppsKindFilter = "ready" | "cli" | "mcp";
 type AutomationFilter = "all" | "active" | "paused" | "failed" | "system";
 type AutomationSort = "next" | "last" | "updated" | "name";
 type AutomationAction = "enable" | "disable" | "delete" | "run";
 type AppsCatalogItem =
-  | { id: string; kind: "nanobot"; feature: NanobotFeatureInfo }
   | { id: string; kind: "cli"; app: CliAppInfo }
   | { id: string; kind: "mcp"; preset: McpPresetInfo };
 
@@ -199,10 +240,16 @@ type RestartAwarePayload = {
   runtime_capabilities?: SettingsPayload["runtime_capabilities"];
 };
 type ProviderApiType = "auto" | "chat_completions" | "responses";
-type ProviderForm = { apiKey: string; apiBase: string; apiType: ProviderApiType };
+type ProviderForm = {
+  apiKey: string;
+  apiBase: string;
+  apiType: ProviderApiType;
+  proxy: string;
+};
 type CustomMcpTransport = "stdio" | "streamableHttp" | "sse";
 
-const CONTEXT_WINDOW_TOKEN_OPTIONS = [65_536, 200_000, 262_144] as const;
+const CONTEXT_WINDOW_TOKEN_OPTIONS = [65_536, 200_000, 262_144, 500_000, 1_048_576] as const;
+const OAUTH_PROXY_PROVIDERS = new Set(["openai_codex", "xai_grok"]);
 const DEFERRED_MODEL_LIST_PROVIDERS = new Set([
   "aihubmix",
   "atomic_chat",
@@ -210,6 +257,7 @@ const DEFERRED_MODEL_LIST_PROVIDERS = new Set([
   "byteplus_coding_plan",
   "huggingface",
   "lm_studio",
+  "modelscope",
   "novita",
   "ollama",
   "openrouter",
@@ -222,6 +270,11 @@ const DEFERRED_MODEL_LIST_PROVIDERS = new Set([
 const DEFERRED_MODEL_LIST_QUERY_MIN_LENGTH = 2;
 const CLI_APPS_REFRESH_RETRY_MS = 2_000;
 const CLI_APPS_REFRESH_MAX_RETRIES = 30;
+const SETTINGS_SEARCH_INPUT_CLASS = cn(
+  "border-border/45 bg-settings-surface transition-colors hover:border-border/70",
+  "focus-visible:border-border/70 focus-visible:bg-background",
+  "focus-visible:ring-0 focus-visible:ring-offset-0",
+);
 
 const FALLBACK_TIMEZONES = [
   "UTC",
@@ -515,9 +568,13 @@ export function SettingsView({
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClient();
+  const pageVisible = usePageVisibility();
+  const remoteBrowserAccess =
+    typeof window !== "undefined" && !isLoopbackHost(window.location.hostname);
   const [settings, setSettings] = useState<SettingsPayload | null>(() => initialSettings);
   const [cliApps, setCliApps] = useState<CliAppsPayload | null>(null);
   const [nanobotFeatures, setNanobotFeatures] = useState<NanobotFeaturesPayload | null>(null);
+  const featureCatalog = nanobotFeatures?.features ?? [];
   const [mcpPresets, setMcpPresets] = useState<McpPresetsPayload | null>(null);
   const [automations, setAutomations] = useState<AutomationsPayload | null>(null);
   const [loading, setLoading] = useState(() => initialSettings === null);
@@ -538,25 +595,34 @@ export function SettingsView({
   const [nanobotFeatureConfirm, setNanobotFeatureConfirm] = useState<NanobotFeatureInfo | null>(null);
   const [mcpPresetAction, setMcpPresetAction] = useState<string | null>(null);
   const [providerSaving, setProviderSaving] = useState<string | null>(null);
+  const [xaiOAuthFlow, setXaiOAuthFlow] =
+    useState<ProviderOAuthAuthorizationRequired | null>(null);
+  const xaiOAuthFlowRef = useRef<ProviderOAuthAuthorizationRequired | null>(null);
+  const [xaiOAuthCode, setXaiOAuthCode] = useState("");
+  const [xaiOAuthCompleting, setXaiOAuthCompleting] = useState(false);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
   const [imageGenerationSaving, setImageGenerationSaving] = useState(false);
   const [transcriptionSaving, setTranscriptionSaving] = useState(false);
   const [networkSafetySaving, setNetworkSafetySaving] = useState(false);
+  const [apiService, setApiService] = useState<ApiServicePayload | null>(null);
+  const [apiServiceLoading, setApiServiceLoading] = useState(false);
+  const [apiServiceAction, setApiServiceAction] = useState<"start" | "stop" | null>(null);
+  const [apiServiceError, setApiServiceError] = useState<string | null>(null);
   const [hostEngineApplying, setHostEngineApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>(initialSection);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [providerQuery, setProviderQuery] = useState("");
   const [appsQuery, setAppsQuery] = useState("");
+  const [channelsQuery, setChannelsQuery] = useState("");
   const [automationsQuery, setAutomationsQuery] = useState("");
   const [automationsFilter, setAutomationsFilter] = useState<AutomationFilter>("all");
   const [automationsSort, setAutomationsSort] = useState<AutomationSort>("next");
   const [cliAppsMessage, setCliAppsMessage] = useState<string | null>(null);
   const [cliAppsError, setCliAppsError] = useState<string | null>(null);
-  const [nanobotFeaturesMessage, setNanobotFeaturesMessage] = useState<string | null>(null);
   const [nanobotFeaturesError, setNanobotFeaturesError] = useState<string | null>(null);
   const [cliAppsFocusName, setCliAppsFocusName] = useState<string | null>(null);
-  const [appsKindFilter, setAppsKindFilter] = useState<AppsKindFilter>("all");
+  const [appsKindFilter, setAppsKindFilter] = useState<AppsKindFilter>("cli");
   const [mcpMessage, setMcpMessage] = useState<string | null>(null);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [automationsError, setAutomationsError] = useState<string | null>(null);
@@ -627,6 +693,46 @@ export function SettingsView({
     onSettingsChange?.(payload);
   }, [onSettingsChange]);
 
+  const closeXaiOAuthFlow = useCallback(() => {
+    xaiOAuthFlowRef.current = null;
+    setXaiOAuthFlow(null);
+    setXaiOAuthCode("");
+    setXaiOAuthCompleting(false);
+  }, []);
+
+  useEffect(() => {
+    if (!xaiOAuthFlow) return;
+    let cancelled = false;
+    let timer: number | null = null;
+    const poll = async () => {
+      try {
+        const payload = await completeProviderOAuth(
+          token,
+          xaiOAuthFlow.provider,
+          xaiOAuthFlow.flow_id,
+        );
+        if (cancelled || xaiOAuthFlowRef.current?.flow_id !== xaiOAuthFlow.flow_id) return;
+        if (isProviderOAuthPending(payload)) {
+          timer = window.setTimeout(() => void poll(), 1000);
+          return;
+        }
+        applyPayload(payload);
+        setExpandedProvider(xaiOAuthFlow.provider);
+        setError(null);
+        closeXaiOAuthFlow();
+      } catch (err) {
+        if (cancelled || xaiOAuthFlowRef.current?.flow_id !== xaiOAuthFlow.flow_id) return;
+        setError((err as Error).message);
+        closeXaiOAuthFlow();
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 1000);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [applyPayload, closeXaiOAuthFlow, token, xaiOAuthFlow]);
+
   useEffect(() => {
     if (!initialSettings || settings !== null) return;
     applyPayload(initialSettings);
@@ -657,7 +763,7 @@ export function SettingsView({
 
   const hasSettings = settings !== null;
   useEffect(() => {
-    if (activeSection !== "overview" || !hasSettings) return;
+    if (activeSection !== "overview" || !hasSettings || !pageVisible) return;
     let cancelled = false;
     const refresh = () => {
       fetchSettingsUsage(token)
@@ -670,18 +776,13 @@ export function SettingsView({
     void refresh();
     const interval = window.setInterval(refresh, 5000);
     const onFocus = () => refresh();
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refresh();
-    };
     window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [activeSection, hasSettings, token]);
+  }, [activeSection, hasSettings, pageVisible, token]);
 
   useEffect(() => {
     if (activeSection !== "apps") return;
@@ -719,22 +820,58 @@ export function SettingsView({
   }, [activeSection, token]);
 
   useEffect(() => {
-    if (activeSection !== "apps") return;
+    if (!["channels", "models", "browser", "runtime"].includes(activeSection)) return;
     let cancelled = false;
-    setNanobotFeaturesLoading(true);
-    fetchNanobotFeatures(token)
-      .then((payload) => {
+    const refresh = async (showLoading = false) => {
+      if (showLoading) setNanobotFeaturesLoading(true);
+      try {
+        const payload = await fetchNanobotFeatures(token);
         if (!cancelled) {
           setNanobotFeatures(payload);
           setNanobotFeaturesError(null);
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         const message = (err as Error).message;
         if (!cancelled && message !== "HTTP 404") setNanobotFeaturesError(message);
+      } finally {
+        if (!cancelled && showLoading) setNanobotFeaturesLoading(false);
+      }
+    };
+    void refresh(true);
+    const interval = activeSection === "channels"
+      ? window.setInterval(() => void refresh(false), 5000)
+      : null;
+    const refreshOnFocus = () => {
+      if (activeSection === "channels" && document.visibilityState !== "hidden") {
+        void refresh(false);
+      }
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    return () => {
+      cancelled = true;
+      if (interval !== null) window.clearInterval(interval);
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+    };
+  }, [activeSection, token]);
+
+  useEffect(() => {
+    if (activeSection !== "runtime") return;
+    let cancelled = false;
+    setApiServiceLoading(true);
+    fetchApiService(token)
+      .then((payload) => {
+        if (!cancelled) {
+          setApiService(payload);
+          setApiServiceError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setApiServiceError((err as Error).message);
       })
       .finally(() => {
-        if (!cancelled) setNanobotFeaturesLoading(false);
+        if (!cancelled) setApiServiceLoading(false);
       });
     return () => {
       cancelled = true;
@@ -780,7 +917,7 @@ export function SettingsView({
   );
 
   useEffect(() => {
-    if (activeSection !== "automations") return;
+    if (activeSection !== "automations" || !pageVisible) return;
     let cancelled = false;
     const refresh = async (showLoading = false) => {
       if (cancelled) return;
@@ -798,18 +935,14 @@ export function SettingsView({
     };
     void refresh(true);
     const interval = window.setInterval(() => void refresh(false), 5000);
-    const refreshOnFocus = () => {
-      if (document.visibilityState !== "hidden") void refresh(false);
-    };
+    const refreshOnFocus = () => void refresh(false);
     window.addEventListener("focus", refreshOnFocus);
-    document.addEventListener("visibilitychange", refreshOnFocus);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
       window.removeEventListener("focus", refreshOnFocus);
-      document.removeEventListener("visibilitychange", refreshOnFocus);
     };
-  }, [activeSection, token]);
+  }, [activeSection, pageVisible, token]);
 
   useEffect(() => {
     writeLocalPreferences(localPrefs);
@@ -824,6 +957,7 @@ export function SettingsView({
           apiKey: next[provider.name]?.apiKey ?? "",
           apiBase: next[provider.name]?.apiBase ?? provider.api_base ?? provider.default_api_base ?? "",
           apiType: next[provider.name]?.apiType ?? provider.api_type ?? "auto",
+          proxy: next[provider.name]?.proxy ?? provider.proxy ?? "",
         };
       }
       return next;
@@ -1119,26 +1253,93 @@ export function SettingsView({
     }
   };
 
+  const installCapabilities = async (names: string[]): Promise<boolean> => {
+    const missing = names.filter(
+      (name) => !featureCatalog.find((feature) => feature.name === name)?.installed,
+    );
+    if (!missing.length) return true;
+    setNanobotFeatureAction(`enable:${names.join("+")}`);
+    setNanobotFeaturesError(null);
+    try {
+      let latest = nanobotFeatures;
+      for (const name of missing) {
+        latest = await enableNanobotFeature(token, name);
+        if (latest.requires_restart) {
+          setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
+        }
+      }
+      if (latest) setNanobotFeatures(latest);
+      return true;
+    } catch (err) {
+      setNanobotFeaturesError((err as Error).message);
+      return false;
+    } finally {
+      setNanobotFeatureAction(null);
+    }
+  };
+
+  const handleApiServiceAction = async (
+    action: "start" | "stop",
+    values?: { host: string; port: number; timeout: number; apiKey?: string },
+  ) => {
+    if (apiServiceAction) return;
+    setApiServiceAction(action);
+    setApiServiceError(null);
+    try {
+      const payload = action === "start"
+        ? await startApiService(token, values!)
+        : await stopApiService(token);
+      setApiService(payload);
+      const refreshed = await fetchNanobotFeatures(token);
+      setNanobotFeatures(refreshed);
+      const nextSettings = await fetchSettings(token);
+      applyPayload(nextSettings);
+    } catch (err) {
+      setApiServiceError((err as Error).message);
+    } finally {
+      setApiServiceAction(null);
+    }
+  };
+
   const saveProvider = async (providerName: string) => {
     if (providerSaving) return;
     const provider = settings?.providers.find((item) => item.name === providerName);
     if (!provider) return;
-    if (provider.auth_type === "oauth") return;
-    const providerForm = providerForms[providerName] ?? { apiKey: "", apiBase: "", apiType: "auto" };
+    const isOauthProvider = provider.auth_type === "oauth";
+    const providerForm = providerForms[providerName] ?? {
+      apiKey: "",
+      apiBase: "",
+      apiType: "auto",
+      proxy: provider.proxy ?? "",
+    };
     const apiKey = providerForm.apiKey.trim();
     const apiKeyRequired = provider.api_key_required ?? true;
-    if (!provider.configured && apiKeyRequired && !apiKey) {
+    if (!isOauthProvider && !provider.configured && apiKeyRequired && !apiKey) {
       setError(t("settings.byok.apiKeyRequired"));
       return;
     }
     setProviderSaving(providerName);
     try {
-      const payload = await updateProviderSettings(token, {
-        provider: providerName,
-        apiKey: apiKey || undefined,
-        apiBase: providerForm.apiBase.trim(),
-        apiType: providerForm.apiType,
-      });
+      const supportName = providerName === "bedrock"
+        ? "bedrock"
+        : providerName === "azure_openai"
+          ? "azure"
+          : null;
+      if (supportName && !(await installCapabilities([supportName]))) return;
+      const payload = await updateProviderSettings(
+        token,
+        isOauthProvider
+          ? {
+              provider: providerName,
+              proxy: providerForm.proxy.trim(),
+            }
+          : {
+              provider: providerName,
+              apiKey: apiKey || undefined,
+              apiBase: providerForm.apiBase.trim(),
+              apiType: providerForm.apiType,
+            },
+      );
       applyPayload(payload);
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, image: true }));
@@ -1150,6 +1351,7 @@ export function SettingsView({
           apiKey: "",
           apiBase: providerForm.apiBase.trim(),
           apiType: providerForm.apiType,
+          proxy: providerForm.proxy.trim(),
         },
       }));
       setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
@@ -1164,19 +1366,72 @@ export function SettingsView({
 
   const runProviderOAuth = async (providerName: string, action: "login" | "logout") => {
     if (providerSaving) return;
+    let popup: Window | null = null;
+    if (action === "login" && providerName === "xai_grok" && !remoteBrowserAccess) {
+      try {
+        popup = window.open("about:blank", "_blank");
+        if (popup) popup.opener = null;
+      } catch {
+        popup = null;
+      }
+    }
     setProviderSaving(providerName);
     try {
       const payload =
         action === "login"
           ? await loginProviderOAuth(token, providerName)
           : await logoutProviderOAuth(token, providerName);
+      if (isProviderOAuthAuthorizationRequired(payload)) {
+        try {
+          if (popup && !popup.closed) popup.location.href = payload.authorization_url;
+        } catch {
+          // The dialog keeps the authorization link available when the popup was closed.
+        }
+        xaiOAuthFlowRef.current = payload;
+        setXaiOAuthFlow(payload);
+        setXaiOAuthCode("");
+        setExpandedProvider(providerName);
+        setError(null);
+        return;
+      }
+      popup?.close();
+      closeXaiOAuthFlow();
       applyPayload(payload);
       setExpandedProvider(providerName);
       setError(null);
     } catch (err) {
+      popup?.close();
       setError((err as Error).message);
     } finally {
       setProviderSaving(null);
+    }
+  };
+
+  const completeXaiOAuth = async () => {
+    const flow = xaiOAuthFlowRef.current;
+    const authorizationCode = xaiOAuthCode.trim();
+    if (!flow || !authorizationCode || xaiOAuthCompleting) return;
+    setXaiOAuthCompleting(true);
+    try {
+      const payload = await completeProviderOAuth(
+        token,
+        flow.provider,
+        flow.flow_id,
+        authorizationCode,
+      );
+      if (xaiOAuthFlowRef.current?.flow_id !== flow.flow_id) return;
+      if (isProviderOAuthPending(payload)) return;
+      applyPayload(payload);
+      setExpandedProvider(flow.provider);
+      setError(null);
+      closeXaiOAuthFlow();
+    } catch (err) {
+      if (xaiOAuthFlowRef.current?.flow_id === flow.flow_id) {
+        setError((err as Error).message);
+        closeXaiOAuthFlow();
+      }
+    } finally {
+      setXaiOAuthCompleting(false);
     }
   };
 
@@ -1202,6 +1457,7 @@ export function SettingsView({
 
     setWebSearchSaving(true);
     try {
+      if (provider.name === "olostep" && !(await installCapabilities(["olostep"]))) return;
       const webFetchRestartRequired =
         (webSearchForm.useJinaReader ?? settings.web.fetch.use_jina_reader) !==
         settings.web.fetch.use_jina_reader;
@@ -1251,6 +1507,7 @@ export function SettingsView({
         apiKey: "",
         apiBase: provider.api_base ?? provider.default_api_base ?? "",
         apiType: provider.api_type ?? "auto",
+        proxy: provider.proxy ?? "",
       },
     }));
     setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
@@ -1305,6 +1562,7 @@ export function SettingsView({
             apiKey: "",
             apiBase: forms[providerName]?.apiBase ?? "",
             apiType: forms[providerName]?.apiType ?? "auto",
+            proxy: forms[providerName]?.proxy ?? "",
           },
         }));
         setVisibleProviderKeys((visible) => ({ ...visible, [providerName]: false }));
@@ -1341,9 +1599,8 @@ export function SettingsView({
     name: string,
     confirmed = false,
   ) => {
-    const feature = nanobotFeatures?.features.find((item) => item.name === name);
+    const feature = featureCatalog.find((item) => item.name === name);
     if (action === "enable" && !confirmed && feature && !feature.installed && feature.install_supported) {
-      setNanobotFeaturesMessage(null);
       setNanobotFeaturesError(null);
       setNanobotFeatureConfirm(feature);
       return;
@@ -1351,18 +1608,13 @@ export function SettingsView({
     const key = `${action}:${name}`;
     setNanobotFeatureAction(key);
     setNanobotFeatureConfirm(null);
-    setNanobotFeaturesMessage(null);
     setNanobotFeaturesError(null);
     try {
       const payload = action === "enable"
         ? await enableNanobotFeature(token, name)
         : await disableNanobotFeature(token, name);
       setNanobotFeatures(payload);
-      setNanobotFeaturesMessage(payload.last_action?.message ?? null);
-      if (
-        payload.requires_restart ||
-        payload.features.some((feature) => feature.name === name && feature.requires_restart)
-      ) {
+      if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
       }
     } catch (err) {
@@ -1554,6 +1806,9 @@ export function SettingsView({
             />
             <ProvidersSettings
               settings={settings}
+              nanobotFeatures={nanobotFeatures}
+              featureAction={nanobotFeatureAction}
+              capabilityError={nanobotFeaturesError}
               expandedProvider={expandedProvider}
               providerForms={providerForms}
               visibleProviderKeys={visibleProviderKeys}
@@ -1561,6 +1816,7 @@ export function SettingsView({
               providerSaving={providerSaving}
               query={providerQuery}
               showBrandLogos={localPrefs.brandLogos}
+              remoteBrowserAccess={remoteBrowserAccess}
               onQueryChange={setProviderQuery}
               onToggleProvider={handleToggleProvider}
               onToggleProviderKey={toggleProviderKeyVisibility}
@@ -1572,6 +1828,7 @@ export function SettingsView({
                     apiKey: prev[provider]?.apiKey ?? "",
                     apiBase: prev[provider]?.apiBase ?? "",
                     apiType: prev[provider]?.apiType ?? "auto",
+                    proxy: prev[provider]?.proxy ?? "",
                     ...value,
                   },
                 }))
@@ -1580,7 +1837,7 @@ export function SettingsView({
               onProviderOAuthLogin={(provider) => runProviderOAuth(provider, "login")}
               onProviderOAuthLogout={(provider) => runProviderOAuth(provider, "logout")}
               onResetProviderDraft={resetProviderDraft}
-              imageProviderRestartPending={pendingRestartSections.image}
+              imageProviderRestartPending={pendingRestartSections.image || pendingRestartSections.runtime}
               onRestart={restartViaSettingsSurface}
               isRestarting={isRestarting || hostEngineApplying}
             />
@@ -1589,6 +1846,7 @@ export function SettingsView({
       case "image":
         return (
           <ImageGenerationSettings
+            token={token}
             settings={settings}
             form={imageGenerationForm}
             dirty={imageGenerationDirty}
@@ -1640,26 +1898,46 @@ export function SettingsView({
             onRestart={restartViaSettingsSurface}
             isRestarting={isRestarting || hostEngineApplying}
             requiresRestartPending={pendingRestartSections.browser}
+            olostepFeature={featureCatalog.find((feature) => feature.name === "olostep")}
+            olostepInstalling={nanobotFeatureAction === "enable:olostep"}
+            capabilityError={nanobotFeaturesError}
+          />
+        );
+      case "channels":
+        return (
+          <ChannelsSettings
+            token={token}
+            nanobotFeatures={nanobotFeatures}
+            loading={nanobotFeaturesLoading}
+            query={channelsQuery}
+            actionKey={nanobotFeatureAction}
+            chatAppsDocsUrl={settings.docs?.chat_apps_url}
+            showBrandLogos={localPrefs.brandLogos}
+            error={nanobotFeaturesError}
+            requiresRestartPending={pendingRestartSections.runtime}
+            onQueryChange={setChannelsQuery}
+            onAction={handleNanobotFeatureAction}
+            onFeaturesUpdate={setNanobotFeatures}
+            onDismissStatus={() => {
+              setNanobotFeaturesError(null);
+            }}
+            onRestart={restartViaSettingsSurface}
+            isRestarting={isRestarting || hostEngineApplying}
           />
         );
       case "apps":
         return (
           <AppsCatalogSettings
             cliApps={cliApps}
-            nanobotFeatures={nanobotFeatures}
             mcpPresets={mcpPresets}
             cliAppsLoading={cliAppsLoading}
-            nanobotFeaturesLoading={nanobotFeaturesLoading}
             mcpPresetsLoading={mcpPresetsLoading}
             query={appsQuery}
             filter={appsKindFilter}
             cliActionKey={cliAppsAction}
-            nanobotActionKey={nanobotFeatureAction}
             mcpActionKey={mcpPresetAction}
             cliMessage={cliAppsMessage}
             cliError={cliAppsError}
-            nanobotMessage={nanobotFeaturesMessage}
-            nanobotError={nanobotFeaturesError}
             cliFocusName={cliAppsFocusName}
             mcpMessage={mcpMessage}
             mcpError={mcpError}
@@ -1671,13 +1949,10 @@ export function SettingsView({
             onQueryChange={setAppsQuery}
             onFilterChange={setAppsKindFilter}
             onCliAction={handleCliAppAction}
-            onNanobotAction={handleNanobotFeatureAction}
             onMcpAction={handleMcpPresetAction}
             onDismissStatus={() => {
               setCliAppsMessage(null);
               setCliAppsError(null);
-              setNanobotFeaturesMessage(null);
-              setNanobotFeaturesError(null);
               setMcpMessage(null);
               setMcpError(null);
             }}
@@ -1732,6 +2007,16 @@ export function SettingsView({
             onRestart={restartViaSettingsSurface}
             isRestarting={isRestarting || hostEngineApplying}
             requiresRestartPending={pendingRestartSections.runtime}
+            apiService={apiService}
+            apiServiceLoading={apiServiceLoading}
+            apiServiceAction={apiServiceAction}
+            apiServiceError={apiServiceError}
+            langfuseFeature={featureCatalog.find((feature) => feature.name === "langfuse")}
+            capabilitiesLoading={nanobotFeaturesLoading}
+            capabilityAction={nanobotFeatureAction}
+            capabilityError={nanobotFeaturesError}
+            onApiServiceAction={handleApiServiceAction}
+            onInstallCapability={(name) => void installCapabilities([name])}
           />
         );
       case "advanced":
@@ -1754,14 +2039,7 @@ export function SettingsView({
   };
 
   return (
-    <div
-      className={cn(
-        "flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row",
-        showSidebar
-          ? "bg-[radial-gradient(circle_at_50%_0%,hsl(var(--muted))_0%,hsl(var(--background))_42%)]"
-          : "bg-background",
-      )}
-    >
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-settings-canvas lg:flex-row">
       {showSidebar ? (
         <SettingsSidebar
           activeSection={activeSection}
@@ -1781,6 +2059,21 @@ export function SettingsView({
         onOpenChange={setModelConfigurationOpen}
         onChangeDraft={setModelConfigurationForm}
         onSave={handleCreateModelConfiguration}
+      />
+
+      <XaiOAuthLoginDialog
+        flow={xaiOAuthFlow}
+        authorizationCode={xaiOAuthCode}
+        completing={xaiOAuthCompleting}
+        remoteBrowserAccess={remoteBrowserAccess}
+        onAuthorizationCodeChange={setXaiOAuthCode}
+        onOpenAuthorization={() => {
+          if (!xaiOAuthFlow) return;
+          const opened = window.open(xaiOAuthFlow.authorization_url, "_blank", "noopener,noreferrer");
+          if (opened) opened.opener = null;
+        }}
+        onComplete={() => void completeXaiOAuth()}
+        onClose={closeXaiOAuthFlow}
       />
 
       <NanobotFeatureInstallDialog
@@ -1810,10 +2103,17 @@ export function SettingsView({
         onSave={handleAutomationEdit}
       />
 
-      <main className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <main
+        className={cn(
+          "min-w-0 flex-1 bg-settings-canvas [scrollbar-gutter:stable]",
+          activeSection === "channels" ? "overflow-y-auto xl:overflow-hidden" : "overflow-y-auto",
+        )}
+      >
         <div
           className={cn(
-            "mx-auto w-full max-w-[920px] px-4 py-6 sm:px-8 sm:py-8 lg:py-12",
+            "mx-auto w-full px-4 py-6 sm:px-8 sm:py-8 lg:py-12",
+            activeSection === "channels" ? "max-w-[1240px] xl:px-10" : "max-w-[920px]",
+            activeSection === "channels" && "flex min-h-full flex-col xl:h-full xl:min-h-0",
             hostChromeInset && "pt-[4.25rem] sm:pt-[4.25rem] lg:pt-[4.75rem]",
           )}
         >
@@ -1822,7 +2122,7 @@ export function SettingsView({
               <button
                 type="button"
                 onClick={onBackToChat}
-                className="mb-4 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground lg:hidden"
+                className="touch-target mb-4 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground lg:hidden"
               >
                 <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
                 {t("settings.backToChat")}
@@ -1839,7 +2139,7 @@ export function SettingsView({
           </div>
 
           {loading ? (
-            <div className="flex h-48 items-center justify-center rounded-[24px] border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-[0_20px_70px_rgba(15,23,42,0.07)]">
+            <div className="flex h-48 items-center justify-center rounded-[22px] bg-settings-surface text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               {t("settings.status.loading")}
             </div>
@@ -1850,7 +2150,13 @@ export function SettingsView({
               </SettingsRow>
             </SettingsGroup>
           ) : settings ? (
-            <div className="space-y-5">
+            <div
+              className={cn(
+                "space-y-5",
+                activeSection === "channels" &&
+                  "flex min-h-0 flex-1 flex-col xl:overflow-hidden",
+              )}
+            >
               {error ? (
                 <div className="rounded-[18px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
                   {error}
@@ -1872,6 +2178,7 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "image", icon: ImageIcon, fallback: "Image" },
   { key: "voice", icon: Mic, fallback: "Voice" },
   { key: "browser", icon: Globe2, fallback: "Web" },
+  { key: "channels", icon: MessageCircle, fallback: "Channels" },
   { key: "runtime", icon: Server, fallback: "System" },
   { key: "advanced", icon: ShieldCheck, fallback: "Security" },
 ];
@@ -1898,22 +2205,29 @@ function SettingsSidebar({
   hostChromeInset?: boolean;
 }) {
   const { t } = useTranslation();
+  const activeItem = SETTINGS_NAV_ITEMS.find((item) => item.key === activeSection)
+    ?? SETTINGS_NAV_ITEMS[0];
+  const ActiveIcon = activeItem.icon;
+  const activeLabel = t(`settings.nav.${activeItem.key}`, {
+    defaultValue: activeItem.fallback,
+  });
+
   return (
     <aside
       className={cn(
-        "flex w-full shrink-0 flex-col border-b border-border/55 bg-card/62 px-3 pb-2 shadow-[inset_0_-1px_0_rgba(255,255,255,0.55)] backdrop-blur-xl dark:bg-card/45 dark:shadow-none md:w-[17rem] md:border-b-0 md:border-r md:px-3 md:pb-4 md:shadow-[inset_-1px_0_0_rgba(255,255,255,0.55)]",
-        hostChromeInset ? "pt-[4.25rem] md:pt-[4.25rem]" : "pt-4 md:pt-4",
+        "flex w-full shrink-0 flex-col bg-settings-surface px-3 pb-2 lg:w-[17rem] lg:px-3 lg:pb-4",
+        hostChromeInset ? "pt-[4.25rem] lg:pt-[4.25rem]" : "pt-4 lg:pt-4",
       )}
     >
       <button
         type="button"
         onClick={onBackToChat}
-        className="mb-2 inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground md:mb-3"
+        className="touch-target mb-2 inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground lg:mb-3"
       >
         <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
         {t("settings.backToChat")}
       </button>
-      <div className="mb-3 px-1 md:mb-4 md:px-2">
+      <div className="mb-3 px-1 lg:mb-4 lg:px-2">
         <h2 className="text-[18px] font-normal tracking-normal text-foreground">
           {t("settings.sidebar.title")}
         </h2>
@@ -1921,31 +2235,75 @@ function SettingsSidebar({
 
       <nav
         aria-label={t("settings.sidebar.ariaLabel")}
-        className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:mx-0 md:block md:space-y-1 md:overflow-visible md:px-0 md:pb-0"
+        className="w-full"
       >
-        {SETTINGS_NAV_ITEMS.map(({ key, icon: Icon, fallback }) => {
-          const active = key === activeSection;
-          return (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <button
-              key={key}
               type="button"
-              aria-current={active ? "page" : undefined}
-              onClick={() => onSelectSection(key)}
-              className={cn(
-                "flex h-9 w-auto shrink-0 items-center gap-2 rounded-full px-3 text-left text-[13px] font-medium transition-colors md:w-full md:rounded-[10px] md:px-2.5",
-                active
-                  ? "bg-muted/90 text-foreground shadow-[inset_0_0_0_1px_rgba(0,0,0,0.025)]"
-                  : "text-muted-foreground/78 hover:bg-muted/45 hover:text-foreground",
-              )}
+              aria-label={`${t("settings.sidebar.title")}: ${activeLabel}`}
+              className="touch-target flex h-11 w-full items-center gap-2.5 rounded-[14px] bg-sidebar-accent px-3 text-left text-[13px] font-medium text-foreground transition-colors hover:bg-sidebar-accent/80 lg:hidden"
             >
-              <Icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
-              <span className="truncate">{t(`settings.nav.${key}`, { defaultValue: fallback })}</span>
+              <ActiveIcon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+              <span className="min-w-0 flex-1 truncate">{activeLabel}</span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
             </button>
-          );
-        })}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            sideOffset={6}
+            className="w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-1.5rem)] rounded-[16px] p-1.5"
+          >
+            {SETTINGS_NAV_ITEMS.map(({ key, icon: Icon, fallback }) => {
+              const active = key === activeSection;
+              return (
+                <DropdownMenuItem
+                  key={key}
+                  aria-current={active ? "page" : undefined}
+                  onSelect={() => onSelectSection(key)}
+                  className={cn(
+                    "flex h-10 cursor-default items-center gap-2.5 rounded-[11px] px-2.5 text-[13px] font-medium",
+                    active && "bg-sidebar-accent text-foreground focus:bg-sidebar-accent",
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">
+                    {t(`settings.nav.${key}`, { defaultValue: fallback })}
+                  </span>
+                  {active ? <Check className="h-4 w-4 shrink-0" aria-hidden /> : null}
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <div className="hidden space-y-1 lg:block">
+          {SETTINGS_NAV_ITEMS.map(({ key, icon: Icon, fallback }) => {
+            const active = key === activeSection;
+            return (
+              <button
+                key={key}
+                type="button"
+                aria-current={active ? "page" : undefined}
+                onClick={() => onSelectSection(key)}
+                className={cn(
+                  "touch-target flex h-9 w-full items-center gap-2 rounded-[10px] px-2.5 text-left text-[13px] font-medium transition-colors",
+                  active
+                    ? "bg-sidebar-accent text-foreground"
+                    : "text-muted-foreground/78 hover:bg-muted/45 hover:text-foreground",
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                <span className="truncate">
+                  {t(`settings.nav.${key}`, { defaultValue: fallback })}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </nav>
 
-      <div className="hidden md:mt-auto md:block md:pt-4">
+      <div className="hidden lg:mt-auto lg:block lg:pt-4">
         {onLogout && !hostChromeInset ? (
           <Button
             type="button"
@@ -2044,7 +2402,7 @@ function OverviewSettings({
       : tx("settings.values.ready", "Ready");
   return (
     <div className="space-y-7">
-      <section>
+      <section className="rounded-[22px] bg-settings-surface px-4 py-4 sm:px-5">
         <TokenUsageHeatmap usage={settings.usage} timeZone={settings.agent.timezone} />
       </section>
 
@@ -2250,7 +2608,8 @@ function AppearanceSettings({
               <span
                 className={cn(
                   "rounded-full px-3 py-1 transition-colors",
-                  theme === "light" && "bg-background text-foreground shadow-sm",
+                  theme === "light" &&
+                    "bg-background text-foreground ring-1 ring-inset ring-border/45",
                 )}
               >
                 {t("settings.values.light")}
@@ -2258,7 +2617,8 @@ function AppearanceSettings({
               <span
                 className={cn(
                   "rounded-full px-3 py-1 transition-colors",
-                  theme === "dark" && "bg-background text-foreground shadow-sm",
+                  theme === "dark" &&
+                    "bg-background text-foreground ring-1 ring-inset ring-border/45",
                 )}
               >
                 {t("settings.values.dark")}
@@ -2352,6 +2712,82 @@ function AppearanceSettings({
         </SettingsGroup>
       </section>
     </div>
+  );
+}
+
+function XaiOAuthLoginDialog({
+  flow,
+  authorizationCode,
+  completing,
+  remoteBrowserAccess,
+  onAuthorizationCodeChange,
+  onOpenAuthorization,
+  onComplete,
+  onClose,
+}: {
+  flow: ProviderOAuthAuthorizationRequired | null;
+  authorizationCode: string;
+  completing: boolean;
+  remoteBrowserAccess: boolean;
+  onAuthorizationCodeChange: (value: string) => void;
+  onOpenAuthorization: () => void;
+  onComplete: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <Dialog
+      open={Boolean(flow)}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent className="w-[min(calc(100vw-2rem),28rem)] rounded-[24px]">
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onComplete();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>xAI Grok</DialogTitle>
+            <DialogDescription>
+              {remoteBrowserAccess
+                ? t("settings.oauth.remoteCodeHelp")
+                : t("settings.oauth.localCodeHelp")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label
+              htmlFor="xai-oauth-code"
+              className="block text-xs font-medium text-foreground"
+            >
+              {t("settings.oauth.authorizationCode")}
+            </label>
+            <Input
+              id="xai-oauth-code"
+              value={authorizationCode}
+              onChange={(event) => onAuthorizationCodeChange(event.target.value)}
+              placeholder={t("settings.oauth.authorizationCode")}
+              aria-label={t("settings.oauth.authorizationCode")}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <DialogFooter className="gap-2 sm:space-x-0">
+            <Button type="button" variant="outline" onClick={onOpenAuthorization}>
+              <ExternalLink className="mr-2 h-4 w-4" aria-hidden />
+              {t("settings.oauth.signIn")}
+            </Button>
+            <Button type="submit" disabled={!authorizationCode.trim() || completing}>
+              {completing ? t("settings.oauth.signingIn") : t("settings.oauth.finishSignIn")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -2468,6 +2904,30 @@ function NewModelConfigurationDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function CapabilityInstallNotice({
+  title,
+  description,
+  installing = false,
+}: {
+  title: string;
+  description: string;
+  installing?: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-3 rounded-[14px] border border-border/55 bg-muted/22 px-3.5 py-3">
+      {installing ? (
+        <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" aria-hidden />
+      ) : (
+        <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+      )}
+      <div className="min-w-0">
+        <p className="text-[12.5px] font-medium text-foreground">{title}</p>
+        <p className="mt-0.5 text-[12px] leading-5 text-muted-foreground">{description}</p>
+      </div>
+    </div>
   );
 }
 
@@ -2633,7 +3093,15 @@ function ModelsSettings({
               options={CONTEXT_WINDOW_TOKEN_OPTIONS.map((tokens) => ({
                 value: String(tokens),
                 label:
-                  tokens === 262_144 ? "256K" : tokens === 200_000 ? "200K" : "64K",
+                  tokens === 1_048_576
+                    ? "1M"
+                    : tokens === 500_000
+                      ? "500K"
+                      : tokens === 262_144
+                        ? "256K"
+                        : tokens === 200_000
+                          ? "200K"
+                          : "64K",
               }))}
               onChange={(value) =>
                 setForm((prev) => ({
@@ -2663,6 +3131,9 @@ function ModelsSettings({
 
 function ProvidersSettings({
   settings,
+  nanobotFeatures,
+  featureAction,
+  capabilityError,
   expandedProvider,
   providerForms,
   visibleProviderKeys,
@@ -2670,6 +3141,7 @@ function ProvidersSettings({
   providerSaving,
   query,
   showBrandLogos,
+  remoteBrowserAccess,
   onQueryChange,
   onToggleProvider,
   onToggleProviderKey,
@@ -2684,6 +3156,9 @@ function ProvidersSettings({
   isRestarting,
 }: {
   settings: SettingsPayload;
+  nanobotFeatures: NanobotFeaturesPayload | null;
+  featureAction: string | null;
+  capabilityError: string | null;
   expandedProvider: string | null;
   providerForms: Record<string, ProviderForm>;
   visibleProviderKeys: Record<string, boolean>;
@@ -2691,6 +3166,7 @@ function ProvidersSettings({
   providerSaving: string | null;
   query: string;
   showBrandLogos: boolean;
+  remoteBrowserAccess: boolean;
   onQueryChange: (query: string) => void;
   onToggleProvider: (provider: string) => void;
   onToggleProviderKey: (provider: string) => void;
@@ -2719,17 +3195,31 @@ function ProvidersSettings({
       apiKey: "",
       apiBase: provider.api_base ?? provider.default_api_base ?? "",
       apiType: provider.api_type ?? "auto",
+      proxy: provider.proxy ?? "",
     };
     const saving = providerSaving === provider.name;
     const isOauthProvider = provider.auth_type === "oauth";
+    const supportsOauthProxy = isOauthProvider && OAUTH_PROXY_PROVIDERS.has(provider.name);
     const keyVisible = !!visibleProviderKeys[provider.name];
     const editingKey = !provider.configured || !!editingProviderKeys[provider.name];
     const apiKeyRequired = provider.api_key_required ?? true;
     const apiKey = form.apiKey.trim();
     const apiBase = form.apiBase.trim();
+    const proxy = form.proxy.trim();
+    const oauthProxyDirty = supportsOauthProxy && proxy !== (provider.proxy ?? "").trim();
+    const oauthProxySaving = saving && oauthProxyDirty;
+    const oauthActionBusy = saving && !oauthProxySaving;
     const missingRequiredApiKey = !isOauthProvider && apiKeyRequired && !provider.configured && !apiKey;
     const missingOptionalCredential =
       !isOauthProvider && !apiKeyRequired && !provider.configured && !apiKey && !apiBase;
+    const supportName = provider.name === "bedrock"
+      ? "bedrock"
+      : provider.name === "azure_openai"
+        ? "azure"
+        : null;
+    const supportFeature = supportName
+      ? (nanobotFeatures?.features ?? []).find((feature) => feature.name === supportName)
+      : null;
     return (
       <div key={provider.name} className="divide-y divide-border/45">
         <button
@@ -2764,49 +3254,134 @@ function ProvidersSettings({
 
         {expanded ? (
           <div className="space-y-3 bg-muted/18 px-4 py-4 sm:px-5">
+            {supportFeature && !supportFeature.installed ? (
+              <CapabilityInstallNotice
+                title={tx("settings.capabilities.providerSupport", "Provider support")}
+                description={tx(
+                  "settings.capabilities.providerInstallOnSave",
+                  "Required support will be installed automatically when you save this provider.",
+                )}
+                installing={featureAction === `enable:${supportName}`}
+              />
+            ) : null}
+            {supportName && capabilityError ? (
+              <p className="text-[12px] text-destructive">{capabilityError}</p>
+            ) : null}
             {isOauthProvider ? (
-              <div className="flex flex-col gap-3 rounded-[18px] border border-border/45 bg-background/75 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-[13px] font-semibold text-foreground">
-                    {tx("settings.oauth.authentication", "OAuth authentication")}
-                  </p>
-                  <p className="mt-1 truncate text-[12px] text-muted-foreground">
-                    {provider.configured
-                      ? t("settings.oauth.signedInAs", {
-                          account: provider.oauth_account || provider.label,
-                          defaultValue: "Signed in as {{account}}",
-                        })
-                      : tx("settings.oauth.signInHelp", "Sign in from this device; no API key is stored in config.")}
-                  </p>
-                </div>
-                <div className="flex shrink-0 justify-end gap-2">
-                  {provider.configured ? (
+              <>
+                <div className="flex flex-col gap-3 rounded-[18px] border border-border/45 bg-background/75 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-foreground">
+                      {tx("settings.oauth.authentication", "OAuth authentication")}
+                    </p>
+                    <p className="mt-1 text-[12px] text-muted-foreground">
+                      {provider.configured
+                        ? t("settings.oauth.signedInAs", {
+                            account: provider.oauth_account || provider.label,
+                            defaultValue: "Signed in as {{account}}",
+                          })
+                        : provider.name === "xai_grok" && remoteBrowserAccess
+                          ? tx(
+                              "settings.oauth.remoteSignInHelp",
+                              "Select Sign in to open xAI on your computer, then paste the authorization code shown after login.",
+                            )
+                          : tx("settings.oauth.signInHelp", "Sign in from this device; no API key is stored in config.")}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 justify-end gap-2">
+                    {provider.configured ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onProviderOAuthLogout(provider.name)}
+                        disabled={saving}
+                        className="rounded-full"
+                      >
+                        {tx("settings.oauth.signOut", "Sign out")}
+                      </Button>
+                    ) : null}
                     <Button
                       size="sm"
-                      variant="ghost"
-                      onClick={() => onProviderOAuthLogout(provider.name)}
-                      disabled={saving}
+                      variant="outline"
+                      onClick={() => onProviderOAuthLogin(provider.name)}
+                      disabled={saving || oauthProxyDirty || !provider.oauth_login_supported}
+                      title={
+                        oauthProxyDirty
+                          ? tx(
+                              "settings.oauth.proxySaveBeforeSignIn",
+                              "Save proxy changes before signing in.",
+                            )
+                          : undefined
+                      }
                       className="rounded-full"
                     >
-                      {tx("settings.oauth.signOut", "Sign out")}
+                      {oauthActionBusy ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                      ) : null}
+                      {oauthActionBusy
+                        ? tx("settings.oauth.signingIn", "Signing in...")
+                        : provider.configured
+                          ? tx("settings.oauth.signInAgain", "Sign in again")
+                          : tx("settings.oauth.signIn", "Sign in")}
                     </Button>
-                  ) : null}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onProviderOAuthLogin(provider.name)}
-                    disabled={saving || !provider.oauth_login_supported}
-                    className="rounded-full"
-                  >
-                    {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-                    {saving
-                      ? tx("settings.oauth.signingIn", "Signing in...")
-                      : provider.configured
-                        ? tx("settings.oauth.signInAgain", "Sign in again")
-                        : tx("settings.oauth.signIn", "Sign in")}
-                  </Button>
+                  </div>
                 </div>
-              </div>
+                {supportsOauthProxy ? (
+                  <div className="rounded-[18px] border border-border/45 bg-background/75 px-4 py-3.5">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                        <Globe2 className="h-4 w-4" aria-hidden />
+                      </span>
+                      <label
+                        htmlFor={`provider-${provider.name}-proxy`}
+                        className="text-[13px] font-semibold text-foreground"
+                      >
+                        {tx("settings.oauth.proxyLabel", "Network proxy")}
+                      </label>
+                    </div>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <Input
+                        id={`provider-${provider.name}-proxy`}
+                        value={form.proxy}
+                        onChange={(event) =>
+                          onChangeProviderForm(provider.name, { proxy: event.target.value })
+                        }
+                        placeholder="http://127.0.0.1:7890"
+                        autoCapitalize="none"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        className="h-9 min-w-0 flex-1 rounded-full font-mono text-[12px]"
+                      />
+                      <div className="flex shrink-0 justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => onResetProviderDraft(provider.name)}
+                          disabled={saving || !oauthProxyDirty}
+                          className="rounded-full"
+                        >
+                          {t("settings.actions.cancel")}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onSaveProvider(provider.name)}
+                          disabled={saving || !oauthProxyDirty}
+                          className="rounded-full"
+                        >
+                          {oauthProxySaving ? (
+                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                          ) : null}
+                          {oauthProxySaving
+                            ? t("settings.actions.saving")
+                            : tx("settings.oauth.saveProxy", "Save proxy")}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </>
             ) : (
               <>
             <label className="block space-y-1.5">
@@ -2946,7 +3521,7 @@ function ProvidersSettings({
       {imageProviderRestartPending && onRestart ? (
         <div className="flex min-h-[48px] items-center justify-between gap-3 border-y border-border/55 py-3">
           <p className="text-[13px] leading-5 text-muted-foreground">
-            {tx("settings.status.imageProviderRestart", "Image provider changes saved. Restart when ready.")}
+            {tx("settings.status.imageProviderRestart", "Provider support changed. Restart when ready.")}
           </p>
           <div className="shrink-0">
             <Button
@@ -2972,7 +3547,10 @@ function ProvidersSettings({
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={tx("settings.providers.searchPlaceholder", "Search providers")}
-          className="h-10 rounded-full pl-9 text-[13px]"
+          className={cn(
+            "h-10 rounded-full pl-9 text-[13px]",
+            SETTINGS_SEARCH_INPUT_CLASS,
+          )}
         />
       </div>
       <ProviderSection
@@ -2995,6 +3573,7 @@ function ProvidersSettings({
 }
 
 function ImageGenerationSettings({
+  token,
   settings,
   form,
   dirty,
@@ -3007,6 +3586,7 @@ function ImageGenerationSettings({
   isRestarting,
   requiresRestartPending,
 }: {
+  token: string;
   settings: SettingsPayload;
   form: ImageGenerationSettingsUpdate;
   dirty: boolean;
@@ -3034,6 +3614,14 @@ function ImageGenerationSettings({
     IMAGE_SIZE_OPTIONS.map((value) => ({ name: value, label: value })),
     form.defaultImageSize,
   );
+  const selectProvider = (provider: string) => {
+    const nextProvider = settings.image_generation.providers.find((row) => row.name === provider);
+    onChangeForm((prev) => ({
+      ...prev,
+      provider,
+      model: nextProvider?.default_model || nextProvider?.models?.[0] || prev.model,
+    }));
+  };
 
   return (
     <div className="space-y-7">
@@ -3060,7 +3648,7 @@ function ImageGenerationSettings({
               value={form.provider}
               emptyLabel={tx("settings.image.selectProvider", "Select provider")}
               showProviderLogos={showBrandLogos}
-              onChange={(provider) => onChangeForm((prev) => ({ ...prev, provider }))}
+              onChange={selectProvider}
             />
           </SettingsRow>
           <SettingsRow
@@ -3095,10 +3683,23 @@ function ImageGenerationSettings({
             title={tx("settings.rows.imageModel", "Image model")}
             description={tx("settings.help.imageModel", "Model name sent to the selected image provider.")}
           >
-            <Input
+            <ModelIdPicker
+              token={token}
+              settings={settings}
+              provider={form.provider}
+              models={selectedProvider?.models ?? []}
               value={form.model}
-              onChange={(event) => onChangeForm((prev) => ({ ...prev, model: event.target.value }))}
-              className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+              showProviderLogos={showBrandLogos}
+              emptyLabel={tx("settings.image.selectModel", "Select image model")}
+              searchPlaceholder={tx(
+                "settings.image.searchOrTypeModel",
+                "Search or type model ID",
+              )}
+              emptyMessage={tx(
+                "settings.image.typeModelId",
+                "Type the model ID supported by this provider.",
+              )}
+              onChange={(model) => onChangeForm((prev) => ({ ...prev, model }))}
             />
           </SettingsRow>
           <SettingsRow
@@ -3310,6 +3911,9 @@ function WebSettings({
   onRestart,
   isRestarting,
   requiresRestartPending,
+  olostepFeature,
+  olostepInstalling,
+  capabilityError,
 }: {
   settings: SettingsPayload;
   form: WebSearchSettingsUpdate;
@@ -3326,6 +3930,9 @@ function WebSettings({
   onRestart?: () => void;
   isRestarting?: boolean;
   requiresRestartPending: boolean;
+  olostepFeature?: NanobotFeatureInfo;
+  olostepInstalling: boolean;
+  capabilityError: string | null;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -3359,6 +3966,21 @@ function WebSettings({
     <div className="space-y-7">
       <section>
         <SettingsSectionTitle>{tx("settings.sections.webSearch", "Web search")}</SettingsSectionTitle>
+        {form.provider === "olostep" && olostepFeature && !olostepFeature.installed ? (
+          <div className="mb-3">
+            <CapabilityInstallNotice
+              title={tx("settings.capabilities.searchSupport", "Search provider support")}
+              description={tx(
+                "settings.capabilities.searchInstallOnSave",
+                "Olostep support will be installed automatically when you save.",
+              )}
+              installing={olostepInstalling}
+            />
+          </div>
+        ) : null}
+        {capabilityError ? (
+          <p className="mb-3 text-[12px] text-destructive">{capabilityError}</p>
+        ) : null}
         <SettingsGroup>
           <SettingsRow
             title={t("settings.byok.webSearch.provider")}
@@ -3601,7 +4223,7 @@ function AutomationsSettings({
       <section className="shrink-0">
         <div className="mx-auto flex w-full max-w-[56rem] flex-col gap-3">
           <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
-            <div className="grid w-full min-w-[36rem] grid-cols-5 gap-1 rounded-[15px] bg-muted/42 p-1 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.035)] dark:bg-background/30">
+            <div className="grid w-full min-w-[36rem] grid-cols-5 gap-1 rounded-[15px] bg-muted p-1">
               {summaryOptions.map((option) => (
                 <button
                   key={option.value}
@@ -3609,8 +4231,7 @@ function AutomationsSettings({
                   onClick={() => onFilterChange(option.value)}
                   className={cn(
                     "inline-flex h-8 min-w-0 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-[11px] px-3 text-[12px] font-medium text-muted-foreground transition-colors",
-                    filter === option.value &&
-                      "bg-background text-foreground shadow-[0_8px_20px_rgba(15,23,42,0.07)] dark:bg-background/80",
+                    filter === option.value && "bg-background text-foreground",
                     automationFilterToneClass(option.value, option.count, filter === option.value),
                   )}
                 >
@@ -3638,14 +4259,17 @@ function AutomationsSettings({
                   "settings.automations.search",
                   "Search task, message, linked chat, or schedule",
                 )}
-                className="h-9 w-full rounded-[13px] border-border/45 bg-background/85 pl-9 text-[13px] shadow-[0_8px_22px_rgba(15,23,42,0.04)] dark:border-white/10 dark:bg-background/40"
+                className={cn(
+                  "h-9 w-full rounded-[13px] pl-9 text-[13px]",
+                  SETTINGS_SEARCH_INPUT_CLASS,
+                )}
               />
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex h-9 min-w-[8.5rem] items-center justify-center gap-1.5 whitespace-nowrap rounded-[13px] border border-border/45 bg-background/85 px-3 text-[12px] font-medium text-muted-foreground shadow-[0_8px_22px_rgba(15,23,42,0.04)] transition-colors hover:bg-muted/70 hover:text-foreground dark:border-white/10 dark:bg-background/40 sm:w-auto"
+                  className="inline-flex h-9 min-w-[8.5rem] items-center justify-center gap-1.5 whitespace-nowrap rounded-[13px] border border-border/45 bg-settings-surface px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:w-auto"
                 >
                   <ArrowUpDown className="h-3.5 w-3.5" aria-hidden />
                   <span>{sortLabel[sort]}</span>
@@ -3673,13 +4297,13 @@ function AutomationsSettings({
       ) : null}
 
       {loading && !payload ? (
-        <div className="flex h-44 items-center justify-center rounded-[24px] border border-border/45 bg-card/80 text-[13px] text-muted-foreground shadow-[0_22px_70px_rgba(15,23,42,0.055)]">
+        <div className="flex h-44 items-center justify-center rounded-[22px] bg-settings-surface text-[13px] text-muted-foreground">
           <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
           {tx("settings.automations.loading", "Loading automations...")}
         </div>
       ) : filtered.length && selectedJob ? (
-        <section className="grid min-h-0 overflow-hidden rounded-[22px] border border-border/45 bg-transparent shadow-none dark:border-white/10 xl:grid-cols-[minmax(16rem,18rem)_minmax(0,1fr)] xl:items-stretch">
-          <aside className="flex min-h-0 flex-col overflow-hidden border-b border-border/35 bg-background/36 dark:border-white/10 dark:bg-background/18 xl:border-b-0 xl:border-r">
+        <section className="grid min-h-0 overflow-hidden rounded-[22px] bg-settings-surface xl:grid-cols-[minmax(16rem,18rem)_minmax(0,1fr)] xl:items-stretch">
+          <aside className="flex min-h-0 flex-col overflow-hidden border-b border-border/35 bg-settings-surface xl:border-b-0 xl:border-r">
             <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-3">
               <h2 className="text-[13px] font-semibold tracking-[-0.01em] text-foreground/85">
                 {tx("settings.automations.queue", "Queue")}
@@ -3714,7 +4338,7 @@ function AutomationsSettings({
           />
         </section>
       ) : (
-        <div className="rounded-[24px] border border-border/45 bg-card/80 px-5 py-12 text-center text-[13px] text-muted-foreground shadow-[0_22px_70px_rgba(15,23,42,0.055)]">
+        <div className="rounded-[22px] bg-settings-surface px-5 py-12 text-center text-[13px] text-muted-foreground">
           <div>
             {jobs.length
               ? tx("settings.automations.noMatches", "No automations match this view.")
@@ -3762,8 +4386,8 @@ function AutomationListItem({
         className={cn(
           "group grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-[18px] px-3 py-3.5 text-left transition-colors",
           selected
-            ? "bg-background text-foreground shadow-[0_10px_28px_rgba(15,23,42,0.055)] ring-1 ring-border/45 dark:bg-background/45 dark:ring-white/10"
-            : "text-muted-foreground hover:bg-white/48 hover:text-foreground dark:hover:bg-background/24",
+            ? "bg-background/80 text-foreground"
+            : "text-muted-foreground hover:bg-background/55 hover:text-foreground",
         )}
       >
         <span className="min-w-0">
@@ -3788,7 +4412,7 @@ function AutomationListItem({
           </span>
         </span>
         <span className="flex shrink-0 flex-col items-end gap-2 pt-0.5">
-          <span className="rounded-full bg-white/65 px-2 py-0.5 text-[11px] font-medium text-muted-foreground shadow-[inset_0_0_0_1px_rgba(120,72,25,0.055)] dark:bg-background/35">
+          <span className="rounded-full bg-background/70 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
             {status.label}
           </span>
           {job.delete_after_run ? (
@@ -3851,7 +4475,7 @@ function AutomationDetailPanel({
   }, [job.id]);
 
   return (
-    <article className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-background/42 dark:bg-background/18">
+    <article className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-settings-surface">
       <div className="shrink-0 border-b border-border/35 px-4 py-3.5 dark:border-white/10 sm:px-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
@@ -3880,7 +4504,7 @@ function AutomationDetailPanel({
 
       <div className="grid min-h-0 min-w-0 flex-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_14.5rem]">
         <div className="min-h-0 min-w-0 space-y-3 overflow-y-auto overscroll-contain p-4 sm:p-5">
-          <section className="rounded-[20px] border border-border/35 bg-background/62 px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.58)] dark:border-white/10 dark:bg-background/24">
+          <section className="rounded-[20px] bg-background/55 px-4 py-3.5">
             <div className="flex items-center justify-between gap-3">
               <div className="text-[11px] font-medium leading-none text-muted-foreground/75">
                 {messageLabel}
@@ -3959,7 +4583,7 @@ function AutomationDetailPanel({
           ) : null}
         </div>
 
-        <aside className="min-h-0 overflow-y-auto overscroll-contain border-t border-border/35 bg-muted/20 p-4 text-[12px] text-muted-foreground dark:border-white/10 dark:bg-background/16 lg:border-l lg:border-t-0">
+        <aside className="min-h-0 overflow-y-auto overscroll-contain border-t border-border/35 bg-settings-surface p-4 text-[12px] text-muted-foreground lg:border-l lg:border-t-0">
           <div className="grid gap-3">
             <AutomationDetail
               label={tx("settings.automations.labels.schedule", "Schedule")}
@@ -4033,7 +4657,7 @@ function AutomationActionGroup({
   }
 
   return (
-    <div className="flex shrink-0 items-center gap-1 rounded-full border border-border/35 bg-background/70 p-1 shadow-[0_10px_26px_rgba(15,23,42,0.055)] dark:border-white/10 dark:bg-background/35">
+    <div className="flex shrink-0 items-center gap-1 rounded-full bg-background/65 p-1">
       <AppsActionButton
         ariaLabel={tx("settings.automations.edit", "Edit")}
         disabled={Boolean(actionKey)}
@@ -4089,7 +4713,7 @@ function AutomationStatusBadge({
   return (
     <span
       className={cn(
-        "inline-flex h-6 items-center rounded-full px-2.5 text-[11.5px] font-medium shadow-[inset_0_0_0_1px_rgba(120,72,25,0.055)]",
+        "inline-flex h-6 items-center rounded-full px-2.5 text-[11.5px] font-medium",
         tone === "success" &&
           "bg-orange-100/72 text-orange-800 dark:bg-orange-300/12 dark:text-orange-200",
         tone === "warning" &&
@@ -4119,7 +4743,7 @@ function AutomationDetail({
   children: ReactNode;
 }) {
   return (
-    <div className="min-w-0 rounded-[17px] bg-background/52 px-3 py-3 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.035)] dark:bg-background/22">
+    <div className="min-w-0 rounded-[17px] bg-background/55 px-3 py-3">
       <div className="text-[11px] font-medium leading-none text-muted-foreground/75">
         {label}
       </div>
@@ -4283,7 +4907,7 @@ function AutomationEditDialog({
                           everyUnit: event.target.value as AutomationEveryUnit,
                         }))
                       }
-                      className="h-10 w-full rounded-[12px] border border-input bg-background px-3 text-[13px] text-foreground shadow-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring"
+                      className="h-10 w-full rounded-[12px] border border-input bg-background px-3 text-[13px] text-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       {AUTOMATION_EVERY_UNITS.map((unit) => (
                         <option key={unit.value} value={unit.value}>
@@ -4672,22 +5296,9 @@ const AUTOMATION_SEARCH_FIELDS = new Set<AutomationSearchField>([
   "status",
 ]);
 
-const AUTOMATION_CHANNEL_LABELS: Record<string, string> = {
+const HOST_AUTOMATION_CHANNEL_LABELS: Record<string, string> = {
   api: "API",
   cli: "CLI",
-  dingtalk: "DingTalk",
-  discord: "Discord",
-  email: "Email",
-  feishu: "Feishu",
-  matrix: "Matrix",
-  msteams: "Microsoft Teams",
-  qq: "QQ",
-  slack: "Slack",
-  telegram: "Telegram",
-  wechat: "WeChat",
-  wecom: "WeCom",
-  weixin: "WeChat",
-  whatsapp: "WhatsApp",
 };
 
 function parseAutomationSearchQuery(query: string): AutomationSearchToken[] {
@@ -4756,7 +5367,7 @@ function automationOriginSearchParts(job: SessionAutomationJob): Array<string | 
     origin.title,
     origin.preview,
     origin.channel,
-    AUTOMATION_CHANNEL_LABELS[channel],
+    automationChannelDisplayName(channel),
   ];
 }
 
@@ -4893,9 +5504,15 @@ function automationChannelLabel(
   tx: (key: string, fallback: string, values?: Record<string, unknown>) => string,
 ): string {
   const key = channel.trim().toLowerCase();
-  return AUTOMATION_CHANNEL_LABELS[key]
-    ? tx(`settings.automations.channels.${key}`, AUTOMATION_CHANNEL_LABELS[key])
+  const displayName = automationChannelDisplayName(key);
+  return displayName
+    ? tx(`settings.automations.channels.${key}`, displayName)
     : channel;
+}
+
+function automationChannelDisplayName(channel: string): string | undefined {
+  const key = channel.trim().toLowerCase();
+  return channelUiPresentation(key)?.displayName ?? HOST_AUTOMATION_CHANNEL_LABELS[key];
 }
 
 function formatAutomationSchedule(
@@ -5005,9 +5622,8 @@ function formatAutomationNextTitle(
 
 function automationStatusDotClass(job: SessionAutomationJob): string {
   const status = automationStatusKey(job);
-  if (status === "active" || status === "running") return "bg-orange-500 shadow-[0_0_0_3px_rgba(249,115,22,0.12)]";
-  if (status === "failed") return "bg-amber-500 shadow-[0_0_0_3px_rgba(245,158,11,0.13)]";
-  if (status === "system") return "bg-muted-foreground/45";
+  if (status === "active" || status === "running") return "bg-orange-500";
+  if (status === "failed") return "bg-amber-500";
   return "bg-muted-foreground/45";
 }
 
@@ -5040,22 +5656,347 @@ function formatAutomationInterval(ms: number, locale: string): string {
   return formatAutomationUnit(ms / fallbackSize, fallbackUnit, locale, 1);
 }
 
+function DismissibleStatusMessage({
+  message,
+  isError,
+  onDismiss,
+}: {
+  message: string;
+  isError: boolean;
+  onDismiss: () => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-3 rounded-[12px] border py-2.5 pl-4 pr-2 text-[13px]",
+        isError
+          ? "border-destructive/20 bg-destructive/5 text-destructive"
+          : "border-border/55 bg-muted/35 text-muted-foreground",
+      )}
+    >
+      <span className="min-w-0">{message}</span>
+      <button
+        type="button"
+        aria-label={tx("settings.actions.dismiss", "Dismiss")}
+        title={tx("settings.actions.dismiss", "Dismiss")}
+        onClick={onDismiss}
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
+          isError
+            ? "text-destructive/70 hover:bg-destructive/10 hover:text-destructive"
+            : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
+        )}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+function RestartRequiredNotice({
+  message,
+  onRestart,
+  isRestarting,
+}: {
+  message: string;
+  onRestart?: () => void;
+  isRestarting?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-3 rounded-[12px] border border-amber-500/20 bg-amber-500/8 px-4 py-3 text-[12.5px] text-amber-800 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+      <span>{message}</span>
+      {onRestart ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={onRestart}
+          disabled={isRestarting}
+          className="h-8 rounded-full bg-background/80 px-3 text-[12px] font-semibold"
+        >
+          {isRestarting ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : (
+            <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          )}
+          {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function ChannelsSettings({
+  token,
+  nanobotFeatures,
+  loading,
+  query,
+  actionKey,
+  chatAppsDocsUrl,
+  showBrandLogos,
+  error,
+  requiresRestartPending,
+  onQueryChange,
+  onAction,
+  onFeaturesUpdate,
+  onDismissStatus,
+  onRestart,
+  isRestarting,
+}: {
+  token: string;
+  nanobotFeatures: NanobotFeaturesPayload | null;
+  loading: boolean;
+  query: string;
+  actionKey: string | null;
+  chatAppsDocsUrl?: string;
+  showBrandLogos: boolean;
+  error: string | null;
+  requiresRestartPending: boolean;
+  onQueryChange: (value: string) => void;
+  onAction: (action: "enable" | "disable", name: string) => void;
+  onFeaturesUpdate: (payload: NanobotFeaturesPayload) => void;
+  onDismissStatus: () => void;
+  onRestart?: () => void;
+  isRestarting?: boolean;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const normalizedQuery = query.trim().toLowerCase();
+  const [filter, setFilter] = useState<ChannelFilter>("all");
+  const splitLayout = useMediaQuery("(min-width: 1280px)");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const compactDetailTopRef = useRef<HTMLButtonElement>(null);
+  const [compactDetailOpen, setCompactDetailOpen] = useState(false);
+  const allChannels = (nanobotFeatures?.features ?? [])
+    .filter((feature) => feature.type === "channel")
+    .filter((feature) => feature.settings_visible !== false)
+    .filter((feature) => !normalizedQuery || channelSearchText(feature, t).includes(normalizedQuery))
+    .sort((left, right) => {
+      const rank = Number(!left.ready) - Number(!right.ready);
+      return rank || localizedChannelDisplayName(left, t).localeCompare(
+        localizedChannelDisplayName(right, t),
+      );
+    });
+  const channels = allChannels.filter((feature) => channelMatchesFilter(feature, filter));
+  const [selectedChannelName, setSelectedChannelName] = useState<string | null>(null);
+  const selectedChannel =
+    channels.find((feature) => feature.name === selectedChannelName) ?? channels[0] ?? null;
+  const enabledCount = allChannels.filter(channelIsRunning).length;
+  const offCount = Math.max(0, allChannels.length - enabledCount);
+  const filterOptions: Array<{ value: ChannelFilter; label: string; count: number }> = [
+    { value: "all", label: tx("settings.channels.filterAll", "All"), count: allChannels.length },
+    { value: "on", label: tx("settings.channels.filterOn", "On"), count: enabledCount },
+    { value: "off", label: tx("settings.channels.filterOff", "Off"), count: offCount },
+  ];
+  const statusMessage = error;
+  const statusIsError = true;
+
+  useEffect(() => {
+    if (!channels.length) {
+      if (selectedChannelName !== null) setSelectedChannelName(null);
+      setCompactDetailOpen(false);
+      return;
+    }
+    if (!selectedChannelName || !channels.some((feature) => feature.name === selectedChannelName)) {
+      setSelectedChannelName(channels[0].name);
+      setCompactDetailOpen(false);
+    }
+  }, [channels, selectedChannelName]);
+
+  useEffect(() => {
+    if (splitLayout) return;
+    const resetScroll = () => {
+      let node = containerRef.current?.parentElement ?? null;
+      while (node) {
+        node.scrollTop = 0;
+        node = node.parentElement;
+      }
+      if (compactDetailOpen) {
+        compactDetailTopRef.current?.scrollIntoView?.({ block: "start" });
+      }
+    };
+    resetScroll();
+    const frame = window.requestAnimationFrame(resetScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [compactDetailOpen, selectedChannelName, splitLayout]);
+
+  const openChannel = (name: string) => {
+    setSelectedChannelName(name);
+    if (!splitLayout) setCompactDetailOpen(true);
+  };
+
+  const setupPanel = selectedChannel ? (
+    <ChannelSetupPanel
+      token={token}
+      feature={selectedChannel}
+      actionKey={actionKey}
+      chatAppsDocsUrl={chatAppsDocsUrl}
+      showBrandLogos={showBrandLogos}
+      onAction={onAction}
+      onFeaturesUpdate={onFeaturesUpdate}
+    />
+  ) : null;
+  const showingCompactDetail = !splitLayout && compactDetailOpen && selectedChannel !== null;
+
+  return (
+    <div
+      ref={containerRef}
+      className="flex min-h-full flex-1 flex-col xl:min-h-0 xl:overflow-hidden"
+    >
+      {!showingCompactDetail ? (
+        <section className="shrink-0 space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <p className="max-w-[680px] text-[13px] leading-5 text-muted-foreground">
+              {tx(
+                "settings.channels.description",
+                "Connect chat apps, email, and WebUI to nanobot.",
+              )}
+            </p>
+            <div className="flex flex-wrap gap-2 text-[12px] font-medium text-muted-foreground">
+              <span className="rounded-full bg-muted/70 px-2.5 py-1">
+                {t("settings.channels.caption", {
+                  enabled: enabledCount,
+                  total: allChannels.length,
+                  defaultValue: "{{enabled}} enabled · {{total}} channels",
+                })}
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+              <Input
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                placeholder={tx("settings.channels.searchPlaceholder", "Search channels")}
+                className={cn(
+                  "h-12 rounded-[14px] pl-11 text-[15px]",
+                  SETTINGS_SEARCH_INPUT_CLASS,
+                )}
+              />
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-1.5 rounded-[14px] bg-muted/55 p-1">
+              {filterOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setFilter(option.value)}
+                  className={cn(
+                    "rounded-[11px] px-3 py-1.5 text-[12px] font-medium transition-colors",
+                    filter === option.value
+                      ? "bg-background text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {option.label}
+                  <span className="ml-1 text-[11px] text-muted-foreground">{option.count}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {statusMessage ? (
+        <div className="mt-3 shrink-0">
+          <DismissibleStatusMessage
+            message={statusMessage}
+            isError={statusIsError}
+            onDismiss={onDismissStatus}
+          />
+        </div>
+      ) : null}
+
+      {requiresRestartPending ? (
+        <div className="mt-3 shrink-0">
+          <RestartRequiredNotice
+            message={tx("settings.channels.restartRequired", "Restart nanobot to apply updated channel support.")}
+            onRestart={onRestart}
+            isRestarting={isRestarting}
+          />
+        </div>
+      ) : null}
+
+      <section
+        className={cn(
+          "flex flex-1 flex-col",
+          showingCompactDetail ? "mt-1" : "mt-5",
+          splitLayout && "min-h-0 overflow-hidden",
+        )}
+      >
+        {loading && !nanobotFeatures ? (
+          <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+            {tx("settings.channels.loading", "Loading Channels...")}
+          </div>
+        ) : channels.length ? splitLayout ? (
+          <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(400px,460px)] gap-6 overflow-hidden">
+            <div className="min-h-0 space-y-1 overflow-y-auto overscroll-contain pr-1">
+              {channels.map((feature) => (
+                <ChannelCatalogRow
+                  key={feature.name}
+                  feature={feature}
+                  selected={selectedChannel?.name === feature.name}
+                  showBrandLogos={showBrandLogos}
+                  onSelect={() => openChannel(feature.name)}
+                />
+              ))}
+            </div>
+            <div className="min-h-0 overflow-y-auto overscroll-contain pr-1">{setupPanel}</div>
+          </div>
+        ) : showingCompactDetail ? (
+          <div className="pb-6">
+            <button
+              ref={compactDetailTopRef}
+              type="button"
+              onClick={() => setCompactDetailOpen(false)}
+              className="mb-4 inline-flex h-9 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden />
+              {tx("settings.channels.backToChannels", "All channels")}
+            </button>
+            {setupPanel}
+          </div>
+        ) : (
+          <div className="space-y-1 pb-6">
+            {channels.map((feature) => (
+              <ChannelCatalogRow
+                key={feature.name}
+                feature={feature}
+                selected={false}
+                showBrandLogos={showBrandLogos}
+                onSelect={() => openChannel(feature.name)}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 px-3 py-12 text-center text-sm text-muted-foreground">
+            {tx("settings.channels.empty", "No channels match this filter.")}
+          </div>
+        )}
+      </section>
+
+      <div className={cn("shrink-0 pt-2", showingCompactDetail && "hidden")}>
+        <ThirdPartyBrandNotice />
+      </div>
+    </div>
+  );
+}
+
 function AppsCatalogSettings({
   cliApps,
-  nanobotFeatures,
   mcpPresets,
   cliAppsLoading,
-  nanobotFeaturesLoading,
   mcpPresetsLoading,
   query,
   filter,
   cliActionKey,
-  nanobotActionKey,
   mcpActionKey,
   cliMessage,
   cliError,
-  nanobotMessage,
-  nanobotError,
   cliFocusName,
   mcpMessage,
   mcpError,
@@ -5067,7 +6008,6 @@ function AppsCatalogSettings({
   onQueryChange,
   onFilterChange,
   onCliAction,
-  onNanobotAction,
   onMcpAction,
   onDismissStatus,
   onBackToChat,
@@ -5081,20 +6021,15 @@ function AppsCatalogSettings({
   isRestarting,
 }: {
   cliApps: CliAppsPayload | null;
-  nanobotFeatures: NanobotFeaturesPayload | null;
   mcpPresets: McpPresetsPayload | null;
   cliAppsLoading: boolean;
-  nanobotFeaturesLoading: boolean;
   mcpPresetsLoading: boolean;
   query: string;
   filter: AppsKindFilter;
   cliActionKey: string | null;
-  nanobotActionKey: string | null;
   mcpActionKey: string | null;
   cliMessage: string | null;
   cliError: string | null;
-  nanobotMessage: string | null;
-  nanobotError: string | null;
   cliFocusName: string | null;
   mcpMessage: string | null;
   mcpError: string | null;
@@ -5106,7 +6041,6 @@ function AppsCatalogSettings({
   onQueryChange: (value: string) => void;
   onFilterChange: (value: AppsKindFilter) => void;
   onCliAction: (action: "install" | "update" | "uninstall" | "test", name: string) => void;
-  onNanobotAction: (action: "enable" | "disable", name: string) => void;
   onMcpAction: (action: "enable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
   onDismissStatus: () => void;
   onBackToChat: () => void;
@@ -5122,18 +6056,12 @@ function AppsCatalogSettings({
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const filterOptions = [
-    { value: "all", label: tx("settings.apps.filterAll", "All") },
-    { value: "nanobot", label: tx("settings.apps.filterPlugins", "Plugins") },
-    { value: "cli", label: tx("settings.apps.filterCli", "App CLIs") },
-    { value: "mcp", label: tx("settings.apps.filterMcp", "MCP services") },
+    { value: "ready", label: tx("settings.apps.filterAll", "Ready") },
+    { value: "cli", label: tx("settings.apps.filterCli", "Apps") },
+    { value: "mcp", label: tx("settings.apps.filterMcp", "Integrations") },
   ];
   const normalizedQuery = query.trim().toLowerCase();
   const items: AppsCatalogItem[] = [
-    ...(nanobotFeatures?.features ?? []).map((feature) => ({
-      id: `nanobot:${feature.name}`,
-      kind: "nanobot" as const,
-      feature,
-    })),
     ...(cliApps?.apps ?? []).map((app) => ({ id: `cli:${app.name}`, kind: "cli" as const, app })),
     ...(mcpPresets?.presets ?? []).map((preset) => ({
       id: `mcp:${preset.name}`,
@@ -5141,8 +6069,10 @@ function AppsCatalogSettings({
       preset,
     })),
   ]
-    .filter((item) => filter === "all" || item.kind === filter)
-    .filter((item) => !normalizedQuery || appsSearchText(item).includes(normalizedQuery))
+    .filter((item) => {
+      if (normalizedQuery) return appsSearchText(item).includes(normalizedQuery);
+      return filter === "ready" ? appsReady(item) : item.kind === filter;
+    })
     .sort((left, right) => {
       const rank = Number(!appsReady(left)) - Number(!appsReady(right));
       return rank || appsTitle(left).localeCompare(appsTitle(right));
@@ -5151,21 +6081,18 @@ function AppsCatalogSettings({
     ? (cliApps?.apps ?? []).find((app) => app.name === cliFocusName && app.installed)
     : null;
   const loading =
-    (cliAppsLoading || nanobotFeaturesLoading || mcpPresetsLoading) &&
+    (cliAppsLoading || mcpPresetsLoading) &&
     !cliApps &&
-    !nanobotFeatures &&
     !mcpPresets;
   const statusMessage =
     cliError ||
-    nanobotError ||
     mcpError ||
-    (!focusedApp ? cliMessage || nanobotMessage || mcpMessage : null);
-  const statusIsError = Boolean(cliError || nanobotError || mcpError);
-  const caption = t("settings.apps.caption", {
-    plugins: nanobotFeatures?.enabled_count ?? 0,
-    cli: cliApps?.installed_count ?? 0,
-    mcp: mcpPresets?.installed_count ?? 0,
-    defaultValue: "{{plugins}} Plugin · {{cli}} CLI · {{mcp}} MCP",
+    (!focusedApp ? cliMessage || mcpMessage : null);
+  const statusIsError = Boolean(cliError || mcpError);
+  const readyCount = (cliApps?.installed_count ?? 0) + (mcpPresets?.installed_count ?? 0);
+  const caption = t("settings.apps.enabledSummary", {
+    count: readyCount,
+    defaultValue: "{{count}} ready",
   });
 
   return (
@@ -5175,7 +6102,7 @@ function AppsCatalogSettings({
           <p className="max-w-[680px] text-[13px] leading-5 text-muted-foreground">
             {tx(
               "settings.apps.description",
-              "Enable plugins, local app adapters, and connected tool servers.",
+              "Add tools to nanobot, then @ them in chat.",
             )}
           </p>
           <span className="text-[12px] font-medium text-muted-foreground">{caption}</span>
@@ -5187,7 +6114,10 @@ function AppsCatalogSettings({
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder={tx("settings.apps.searchPlaceholder", "Search Apps")}
-              className="h-12 rounded-[14px] border-border/70 bg-card/90 pl-11 text-[15px] shadow-sm"
+              className={cn(
+                "h-12 rounded-[14px] pl-11 text-[15px]",
+                SETTINGS_SEARCH_INPUT_CLASS,
+              )}
             />
           </div>
           <SegmentedControl
@@ -5199,30 +6129,11 @@ function AppsCatalogSettings({
       </section>
 
       {statusMessage ? (
-        <div
-          className={cn(
-            "flex items-center justify-between gap-3 rounded-[12px] border py-2.5 pl-4 pr-2 text-[13px]",
-            statusIsError
-              ? "border-destructive/20 bg-destructive/5 text-destructive"
-              : "border-border/55 bg-muted/35 text-muted-foreground",
-          )}
-        >
-          <span className="min-w-0">{statusMessage}</span>
-          <button
-            type="button"
-            aria-label={tx("settings.actions.dismiss", "Dismiss")}
-            title={tx("settings.actions.dismiss", "Dismiss")}
-            onClick={onDismissStatus}
-            className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
-              statusIsError
-                ? "text-destructive/70 hover:bg-destructive/10 hover:text-destructive"
-                : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <X className="h-3.5 w-3.5" aria-hidden />
-          </button>
-        </div>
+        <DismissibleStatusMessage
+          message={statusMessage}
+          isError={statusIsError}
+          onDismiss={onDismissStatus}
+        />
       ) : null}
 
       {focusedApp ? (
@@ -5230,31 +6141,16 @@ function AppsCatalogSettings({
       ) : null}
 
       {requiresRestartPending ? (
-        <div className="flex flex-col gap-3 rounded-[12px] border border-amber-500/20 bg-amber-500/8 px-4 py-3 text-[12.5px] text-amber-800 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
-          <span>{tx("settings.apps.restartRequired", "Restart nanobot to apply updated apps and features.")}</span>
-          {onRestart ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={onRestart}
-              disabled={isRestarting}
-              className="h-8 rounded-full bg-background/80 px-3 text-[12px] font-semibold"
-            >
-              {isRestarting ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
-              ) : (
-                <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              )}
-              {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
-            </Button>
-          ) : null}
-        </div>
+        <RestartRequiredNotice
+          message={tx("settings.apps.restartRequired", "Restart nanobot to apply updated apps and features.")}
+          onRestart={onRestart}
+          isRestarting={isRestarting}
+        />
       ) : null}
 
-      <section>
+      <section className="rounded-[22px] bg-settings-surface px-3 py-3 sm:px-4">
         <div className="flex items-center justify-between border-b border-border/45 pb-3">
-          <SettingsSectionTitle>{tx("settings.apps.featured", "Catalog")}</SettingsSectionTitle>
+          <SettingsSectionTitle>{tx("settings.apps.featured", "Tools")}</SettingsSectionTitle>
           <span className="rounded-full bg-muted px-2.5 py-1 text-[12px] font-medium text-muted-foreground">
             {items.length}
           </span>
@@ -5267,14 +6163,7 @@ function AppsCatalogSettings({
         ) : items.length ? (
           <div className="grid gap-x-10 gap-y-1 py-3 md:grid-cols-2">
             {items.map((item) =>
-              item.kind === "nanobot" ? (
-                <NanobotFeatureCatalogRow
-                  key={item.id}
-                  feature={item.feature}
-                  actionKey={nanobotActionKey}
-                  onAction={onNanobotAction}
-                />
-              ) : item.kind === "cli" ? (
+              item.kind === "cli" ? (
                 <CliAppsCatalogRow
                   key={item.id}
                   app={item.app}
@@ -5298,12 +6187,12 @@ function AppsCatalogSettings({
           </div>
         ) : (
           <div className="px-3 py-12 text-center text-sm text-muted-foreground">
-            {tx("settings.apps.empty", "No apps match this filter.")}
+            {tx("settings.apps.empty", "No tools match this view.")}
           </div>
         )}
       </section>
 
-      {filter === "all" || filter === "mcp" ? (
+      {filter === "mcp" ? (
         <McpCustomServerPanel
           form={customMcpForm}
           configImport={mcpConfigImport}
@@ -5317,92 +6206,6 @@ function AppsCatalogSettings({
 
       <ThirdPartyBrandNotice />
     </div>
-  );
-}
-
-function NanobotFeatureCatalogRow({
-  feature,
-  actionKey,
-  onAction,
-}: {
-  feature: NanobotFeatureInfo;
-  actionKey: string | null;
-  onAction: (action: "enable" | "disable", name: string) => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const enableBusy = actionKey === `enable:${feature.name}`;
-  const disableBusy = actionKey === `disable:${feature.name}`;
-  const description = nanobotFeatureStatusLabel(feature, tx);
-  const missingSupport = feature.enabled && !feature.installed;
-  const installSupportLabel = tx("settings.nanobotFeatures.installSupport", "Install support");
-  const enabledLabel =
-    feature.type === "channel" && feature.name === "websocket"
-      ? tx("settings.nanobotFeatures.websocketRequired", "Required for WebUI")
-      : tx("settings.nanobotFeatures.enabled", "Enabled");
-  const enableLabel = feature.installed
-    ? tx("settings.nanobotFeatures.enable", "Enable")
-    : installSupportLabel;
-
-  return (
-    <article className="group flex min-w-0 items-center gap-3 rounded-[14px] px-3 py-3 transition-colors hover:bg-muted/45">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] border border-border/55 bg-card text-muted-foreground shadow-sm">
-        <Bot className="h-4 w-4" aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">
-            {feature.display_name}
-          </h3>
-          <AppsTypeBadge>
-            {feature.type === "channel"
-              ? tx("settings.apps.channelLabel", "Channel")
-              : tx("settings.apps.featureLabel", "Feature")}
-          </AppsTypeBadge>
-        </div>
-        <p className="mt-0.5 truncate text-[12.5px] leading-5 text-muted-foreground">{description}</p>
-      </div>
-      <div className="flex shrink-0 items-center gap-1">
-        {missingSupport && feature.install_supported ? (
-          <AppsActionButton
-            ariaLabel={installSupportLabel}
-            busy={enableBusy}
-            onClick={() => onAction("enable", feature.name)}
-          >
-            <Plus className="h-4 w-4" aria-hidden />
-          </AppsActionButton>
-        ) : feature.enabled && feature.type === "channel" && feature.name !== "websocket" ? (
-          <AppsActionButton
-            ariaLabel={tx("settings.nanobotFeatures.disable", "Disable")}
-            busy={disableBusy}
-            tone="danger"
-            onClick={() => onAction("disable", feature.name)}
-          >
-            <X className="h-4 w-4" aria-hidden />
-          </AppsActionButton>
-        ) : feature.enabled ? (
-          <AppsActionButton
-            ariaLabel={enabledLabel}
-            disabled
-            tone="installed"
-          >
-            <Check className="h-4 w-4" aria-hidden />
-          </AppsActionButton>
-        ) : feature.install_supported ? (
-          <AppsActionButton
-            ariaLabel={enableLabel}
-            busy={enableBusy}
-            onClick={() => onAction("enable", feature.name)}
-          >
-            <Plus className="h-4 w-4" aria-hidden />
-          </AppsActionButton>
-        ) : (
-          <AppsActionButton ariaLabel={tx("settings.cliApps.unavailable", "Unavailable")} disabled>
-            <Plus className="h-4 w-4" aria-hidden />
-          </AppsActionButton>
-        )}
-      </div>
-    </article>
   );
 }
 
@@ -5427,12 +6230,12 @@ function CliAppsCatalogRow({
   const description = app.description || app.requires || app.entry_point || app.name;
 
   return (
-    <article className="group flex min-w-0 items-center gap-3 rounded-[14px] px-3 py-3 transition-colors hover:bg-muted/45">
+    <article className="apps-catalog-row group flex min-w-0 items-center gap-3 rounded-[14px] px-3 py-3 transition-colors hover:bg-muted/45">
       <CliAppLogo app={app} showBrandLogos={showBrandLogos} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-baseline gap-2">
           <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">{app.display_name}</h3>
-          <AppsTypeBadge>{tx("settings.apps.cliLabel", "CLI")}</AppsTypeBadge>
+          <AppsTypeBadge>{tx("settings.apps.cliLabel", "App")}</AppsTypeBadge>
         </div>
         <p className="mt-0.5 truncate text-[12.5px] leading-5 text-muted-foreground">{description}</p>
       </div>
@@ -5564,7 +6367,7 @@ function McpAppsCatalogRow({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-baseline gap-2">
             <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">{preset.display_name}</h3>
-            <AppsTypeBadge>{tx("settings.apps.mcpLabel", "MCP")}</AppsTypeBadge>
+            <AppsTypeBadge>{tx("settings.apps.mcpLabel", "Integration")}</AppsTypeBadge>
           </div>
           <p className="mt-0.5 truncate text-[12.5px] leading-5 text-muted-foreground">{description}</p>
         </div>
@@ -5637,7 +6440,7 @@ function McpAppsCatalogRow({
       </div>
 
       {setupOpen && preset.install_supported && hasFields ? (
-        <div className="mx-3 mb-3 rounded-[14px] border border-border/45 bg-card/85 p-3 shadow-sm">
+        <div className="mx-3 mb-3 rounded-[14px] bg-background/55 p-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="truncate text-[12.5px] font-semibold text-foreground">
@@ -5708,7 +6511,7 @@ function McpAppsCatalogRow({
       ) : null}
 
       {toolsOpen && readyInstalled && toolNames.length ? (
-        <div className="mx-3 mb-3 rounded-[14px] border border-border/45 bg-card/85 p-3 shadow-sm">
+        <div className="mx-3 mb-3 rounded-[14px] bg-background/55 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-[11.5px] font-medium text-muted-foreground">
               {tx("settings.mcp.toolScope", "Tools")}
@@ -5765,7 +6568,7 @@ function McpAppsCatalogRow({
 
 function AppsTypeBadge({ children }: { children: ReactNode }) {
   return (
-    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-[0.06em] text-muted-foreground">
+    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
       {children}
     </span>
   );
@@ -5809,27 +6612,14 @@ const AppsActionButton = forwardRef<HTMLButtonElement, {
 });
 
 function appsTitle(item: AppsCatalogItem): string {
-  if (item.kind === "nanobot") return item.feature.display_name;
   return item.kind === "cli" ? item.app.display_name : item.preset.display_name;
 }
 
 function appsReady(item: AppsCatalogItem): boolean {
-  if (item.kind === "nanobot") return item.feature.enabled;
   return item.kind === "cli" ? item.app.installed : item.preset.installed && item.preset.configured;
 }
 
 function appsSearchText(item: AppsCatalogItem): string {
-  if (item.kind === "nanobot") {
-    const feature = item.feature;
-    return [
-      feature.display_name,
-      feature.name,
-      feature.type,
-      feature.status,
-    ]
-      .join(" ")
-      .toLowerCase();
-  }
   if (item.kind === "cli") {
     const app = item.app;
     return [
@@ -5857,19 +6647,6 @@ function appsSearchText(item: AppsCatalogItem): string {
   ]
     .join(" ")
       .toLowerCase();
-}
-
-function nanobotFeatureStatusLabel(
-  feature: NanobotFeatureInfo,
-  tx: (key: string, fallback: string) => string,
-): string {
-  if (feature.ready && feature.type === "channel" && feature.name === "websocket") {
-    return tx("settings.nanobotFeatures.websocketRequired", "Required for WebUI");
-  }
-  if (feature.ready) return tx("settings.nanobotFeatures.ready", "Ready");
-  if (!feature.installed) return tx("settings.nanobotFeatures.missingDependency", "Support missing");
-  if (feature.type === "channel") return tx("settings.nanobotFeatures.channelDisabled", "Channel is disabled");
-  return tx("settings.nanobotFeatures.notEnabled", "Not enabled");
 }
 
 function McpCustomServerPanel({
@@ -5907,7 +6684,7 @@ function McpCustomServerPanel({
   ];
 
   return (
-    <section className="overflow-hidden rounded-[16px] border border-border/45 bg-card/72 shadow-[0_10px_30px_rgba(15,23,42,0.045)]">
+    <section className="overflow-hidden rounded-[16px] bg-settings-surface">
       <div className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-muted text-muted-foreground">
@@ -5915,10 +6692,13 @@ function McpCustomServerPanel({
           </span>
           <div className="min-w-0">
             <h3 className="text-[13px] font-semibold leading-5 text-foreground">
-              {tx("settings.mcp.moreOptions", "More MCP options")}
+              {tx("settings.mcp.moreOptions", "Add integration")}
             </h3>
             <p className="truncate text-[12px] text-muted-foreground">
-              {tx("settings.mcp.moreOptionsSubtitle", "Add a custom server or import mcp.json.")}
+              {tx(
+                "settings.mcp.moreOptionsSubtitle",
+                "Connect a custom tool server or import an existing configuration.",
+              )}
             </p>
           </div>
         </div>
@@ -6124,10 +6904,9 @@ function mcpPresetStatusLabel(status: string, tx: (key: string, fallback: string
 }
 
 function McpPresetLogo({ preset, showBrandLogos }: { preset: McpPresetInfo; showBrandLogos: boolean }) {
-  const [logoIndex, setLogoIndex] = useState(0);
   const bg = preset.brand_color || "hsl(var(--muted))";
   const logoUrls = useMemo(() => logoFallbackUrls(preset.logo_url), [preset.logo_url]);
-  const logoUrl = logoUrls[logoIndex];
+  const { logoUrl, onLogoError, onLogoLoad } = useLogoFallback(logoUrls);
   const initials = preset.display_name
     .split(/\s+/)
     .filter(Boolean)
@@ -6135,19 +6914,19 @@ function McpPresetLogo({ preset, showBrandLogos }: { preset: McpPresetInfo; show
     .map((part) => part[0]?.toUpperCase())
     .join("") || preset.name.slice(0, 2).toUpperCase();
 
-  useEffect(() => setLogoIndex(0), [preset.logo_url]);
-
   if (showBrandLogos && logoUrl) {
     return (
       <span
         className="grid h-11 w-11 shrink-0 place-items-center rounded-[8px] border border-border/45 bg-background"
-        style={{ boxShadow: `inset 0 0 0 1px ${preset.brand_color ?? "transparent"}22` }}
       >
         <img
           src={logoUrl}
           alt=""
+          decoding="async"
+          loading="lazy"
           className="h-6 w-6 object-contain"
-          onError={() => setLogoIndex((index) => index + 1)}
+          onLoad={onLogoLoad}
+          onError={onLogoError}
         />
       </span>
     );
@@ -6186,12 +6965,7 @@ function CliAppReadyPanel({
   };
 
   return (
-    <section
-      className={cn(
-        "rounded-[12px] border border-border/55 bg-card/88 px-4 py-3",
-        "shadow-[0_8px_26px_rgba(15,23,42,0.055)]",
-      )}
-    >
+    <section className="rounded-[12px] bg-settings-surface px-4 py-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <CliAppLogo app={app} showBrandLogos={showBrandLogos} />
         <div className="min-w-0 flex-1">
@@ -6241,10 +7015,11 @@ function CliAppReadyPanel({
 }
 
 function CliAppLogo({ app, showBrandLogos }: { app: CliAppInfo; showBrandLogos: boolean }) {
-  const [logoIndex, setLogoIndex] = useState(0);
-  const bg = app.brand_color || "hsl(var(--muted))";
-  const logoUrls = useMemo(() => logoFallbackUrls(app.logo_url), [app.logo_url]);
-  const logoUrl = logoUrls[logoIndex];
+  const logoUrls = useMemo(
+    () => (isGenericRepositoryLogoUrl(app.logo_url) ? [] : logoFallbackUrls(app.logo_url)),
+    [app.logo_url],
+  );
+  const { logoUrl, logoLoaded, onLogoError, onLogoLoad } = useLogoFallback(logoUrls);
   const initials = app.display_name
     .split(/\s+/)
     .filter(Boolean)
@@ -6252,29 +7027,38 @@ function CliAppLogo({ app, showBrandLogos }: { app: CliAppInfo; showBrandLogos: 
     .map((part) => part[0]?.toUpperCase())
     .join("") || app.name.slice(0, 2).toUpperCase();
 
-  useEffect(() => setLogoIndex(0), [app.logo_url]);
+  const showRemoteLogo = showBrandLogos && Boolean(logoUrl);
 
-  if (showBrandLogos && logoUrl) {
-    return (
+  return (
+    <span
+      className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-[8px] border border-border/45 bg-muted text-[13px] font-semibold"
+      style={{ color: app.brand_color || "hsl(var(--muted-foreground))" }}
+    >
       <span
-        className="grid h-11 w-11 shrink-0 place-items-center rounded-[8px] border border-border/45 bg-background"
-        style={{ boxShadow: `inset 0 0 0 1px ${app.brand_color ?? "transparent"}22` }}
+        aria-hidden
+        className={cn(
+          "transition-opacity duration-150 motion-reduce:transition-none",
+          showRemoteLogo && logoLoaded ? "opacity-0" : "opacity-100",
+        )}
       >
+        {initials}
+      </span>
+      {showRemoteLogo ? (
         <img
           src={logoUrl}
           alt=""
-          className="h-6 w-6 object-contain"
-          onError={() => setLogoIndex((index) => index + 1)}
+          decoding="async"
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          draggable={false}
+          className={cn(
+            "absolute h-6 w-6 object-contain transition-opacity duration-150 motion-reduce:transition-none",
+            logoLoaded ? "opacity-100" : "opacity-0",
+          )}
+          onLoad={onLogoLoad}
+          onError={onLogoError}
         />
-      </span>
-    );
-  }
-  return (
-    <span
-      className="grid h-11 w-11 shrink-0 place-items-center rounded-[8px] text-[13px] font-semibold text-white"
-      style={{ backgroundColor: bg }}
-    >
-      {initials}
+      ) : null}
     </span>
   );
 }
@@ -6289,6 +7073,16 @@ function RuntimeSettings({
   onRestart,
   isRestarting,
   requiresRestartPending,
+  apiService,
+  apiServiceLoading,
+  apiServiceAction,
+  apiServiceError,
+  langfuseFeature,
+  capabilitiesLoading,
+  capabilityAction,
+  capabilityError,
+  onApiServiceAction,
+  onInstallCapability,
 }: {
   form: AgentSettingsDraft;
   setForm: Dispatch<SetStateAction<AgentSettingsDraft>>;
@@ -6299,10 +7093,27 @@ function RuntimeSettings({
   onRestart?: () => void;
   isRestarting?: boolean;
   requiresRestartPending: boolean;
+  apiService: ApiServicePayload | null;
+  apiServiceLoading: boolean;
+  apiServiceAction: "start" | "stop" | null;
+  apiServiceError: string | null;
+  langfuseFeature?: NanobotFeatureInfo;
+  capabilitiesLoading: boolean;
+  capabilityAction: string | null;
+  capabilityError: string | null;
+  onApiServiceAction: (
+    action: "start" | "stop",
+    values?: { host: string; port: number; timeout: number; apiKey?: string },
+  ) => void;
+  onInstallCapability: (name: string) => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const isNativeHost = getHostApi() !== null || (settings.surface ?? settings.runtime_surface) === "native";
+  const runtimeSurface = settings.surface ?? settings.runtime_surface;
+  const runtimeHost = getRuntimeHost(runtimeSurface, settings.runtime_capabilities);
+  const openLogs = runtimeHost.openLogs;
+  const exportDiagnostics = runtimeHost.exportDiagnostics;
+  const isNativeHost = isNativeRuntime(runtimeSurface);
   const restartActionLabel = isNativeHost
     ? tx("app.system.restartEngine", "Restart engine")
     : t("app.system.restart");
@@ -6316,7 +7127,30 @@ function RuntimeSettings({
   } | null>(null);
   const [hostActionBusy, setHostActionBusy] =
     useState<"logs" | "diagnostics" | null>(null);
-  const hostApi = getHostApi();
+  const apiDefaults = apiService ?? {
+    installed: false,
+    running: false,
+    managed: false,
+    host: settings.api?.host ?? "127.0.0.1",
+    port: settings.api?.port ?? 8900,
+    timeout: settings.api?.timeout ?? 120,
+    api_key_hint: settings.api?.api_key_hint,
+    endpoint: `http://127.0.0.1:${settings.api?.port ?? 8900}/v1`,
+    command: "nanobot serve",
+  };
+  const [apiHost, setApiHost] = useState(apiDefaults.host);
+  const [apiPort, setApiPort] = useState(apiDefaults.port);
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  useEffect(() => {
+    if (!apiService) return;
+    setApiHost(apiService.host);
+    setApiPort(apiService.port);
+    setApiKey("");
+    setApiKeyVisible(false);
+  }, [apiService]);
+  const apiNetworkAccess = !isLoopbackHost(apiHost);
+  const apiMissingNetworkKey = apiNetworkAccess && !apiKey.trim() && !apiDefaults.api_key_hint;
   const engineState = isRestarting
     ? tx("settings.values.restartingEngine", "Restarting")
     : settings.apply_state?.status === "pending"
@@ -6324,11 +7158,11 @@ function RuntimeSettings({
       : tx("settings.values.ready", "Ready");
   const runHostAction = async (
     target: "logs" | "diagnostics",
-    action: () => Promise<string | void>,
+    action: (() => Promise<string | void>) | undefined,
     successMessage: (result: string | void) => string,
     failureMessage: string,
   ) => {
-    if (!hostApi) {
+    if (!action) {
       setHostActionMessage({
         target,
         message: tx(
@@ -6353,7 +7187,7 @@ function RuntimeSettings({
     <div className="space-y-7">
       <section>
         <SettingsSectionTitle>{tx("settings.sections.identity", "Identity")}</SettingsSectionTitle>
-        <SettingsGroup>
+          <SettingsGroup>
           <SettingsRow title={tx("settings.rows.botName", "Bot name")} description={tx("settings.help.botName", "Shown wherever nanobot uses a display name.")}>
             <Input
               value={form.botName}
@@ -6415,7 +7249,7 @@ function RuntimeSettings({
                   onClick={() =>
                     void runHostAction(
                       "logs",
-                      () => hostApi!.openLogs(),
+                      openLogs,
                       () => tx("settings.status.logsOpened", "Opened logs folder."),
                       tx("settings.status.logsOpenFailed", "Could not open logs folder."),
                     )
@@ -6446,11 +7280,11 @@ function RuntimeSettings({
                   onClick={() =>
                     void runHostAction(
                       "diagnostics",
-                      async () => {
-                        const path = await hostApi!.exportDiagnostics();
+                      exportDiagnostics ? async () => {
+                        const path = await exportDiagnostics();
                         setDiagnosticsPath(path);
                         return path;
-                      },
+                      } : undefined,
                       (path) =>
                         t("settings.status.diagnosticsExported", {
                           path: String(path ?? ""),
@@ -6471,6 +7305,171 @@ function RuntimeSettings({
           </SettingsGroup>
         </section>
       ) : null}
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.api.title", "API server")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title={tx("settings.api.openaiCompatible", "OpenAI-compatible API")}
+            description={
+              apiServiceError
+                ? apiServiceError
+                : apiDefaults.running
+                  ? apiDefaults.endpoint
+                  : tx("settings.api.description", "Connect SDKs and agents through a local /v1 endpoint.")
+            }
+          >
+            <div className="flex items-center justify-end gap-2">
+              <StatusPill tone={apiDefaults.running ? "success" : "neutral"}>
+                {apiServiceLoading
+                  ? tx("settings.values.checking", "Checking")
+                  : apiDefaults.running
+                    ? tx("settings.values.running", "Running")
+                    : tx("settings.values.off", "Off")}
+              </StatusPill>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={apiServiceLoading || apiServiceAction !== null || apiMissingNetworkKey}
+                onClick={() =>
+                  onApiServiceAction(
+                    apiDefaults.running ? "stop" : "start",
+                    apiDefaults.running
+                      ? undefined
+                      : {
+                          host: apiHost,
+                          port: apiPort,
+                          timeout: apiDefaults.timeout,
+                          apiKey: apiKey.trim() || undefined,
+                        },
+                  )
+                }
+                className="rounded-full"
+              >
+                {apiServiceAction ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : apiDefaults.running ? (
+                  <PauseCircle className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                ) : (
+                  <PlayCircle className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                )}
+                {apiServiceAction === "start"
+                  ? tx("settings.api.starting", "Starting...")
+                  : apiServiceAction === "stop"
+                    ? tx("settings.api.stopping", "Stopping...")
+                    : apiDefaults.running
+                      ? tx("settings.api.stop", "Stop")
+                      : tx("settings.api.start", "Start API server")}
+              </Button>
+            </div>
+          </SettingsRow>
+          {!apiDefaults.running ? (
+            <>
+              <SettingsRow
+                title={tx("settings.api.access", "Access")}
+                description={
+                  apiNetworkAccess
+                    ? tx("settings.api.networkHelp", "Other devices can connect; an API key is required.")
+                    : tx("settings.api.localHelp", "Only this device can connect.")
+                }
+              >
+                <SegmentedControl
+                  value={apiNetworkAccess ? "network" : "local"}
+                  options={[
+                    { value: "local", label: tx("settings.api.thisDevice", "This device") },
+                    { value: "network", label: tx("settings.api.localNetwork", "Local network") },
+                  ]}
+                  onChange={(value) => setApiHost(value === "network" ? "0.0.0.0" : "127.0.0.1")}
+                />
+              </SettingsRow>
+              <SettingsRow
+                title={tx("settings.api.port", "Port")}
+                description={tx("settings.api.portHelp", "The API uses this local port.")}
+              >
+                <NumberInput value={apiPort} min={1} max={65535} onChange={setApiPort} />
+              </SettingsRow>
+              {apiNetworkAccess ? (
+                <SettingsRow
+                  title={tx("settings.api.apiKey", "API key")}
+                  description={
+                    apiMissingNetworkKey
+                      ? tx("settings.api.apiKeyRequired", "Required before exposing the API to your network.")
+                      : tx("settings.api.apiKeyHelp", "Clients send this as a Bearer token.")
+                  }
+                >
+                  <div className="relative w-[280px] max-w-full">
+                    <Input
+                      type={apiKeyVisible ? "text" : "password"}
+                      value={apiKey}
+                      onChange={(event) => setApiKey(event.target.value)}
+                      placeholder={apiDefaults.api_key_hint ?? tx("settings.api.apiKeyPlaceholder", "Enter an API key")}
+                      className="h-9 rounded-full pr-10 text-[13px]"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setApiKeyVisible((visible) => !visible)}
+                      aria-label={apiKeyVisible ? tx("settings.byok.hideApiKey", "Hide API key") : tx("settings.byok.showApiKey", "Show API key")}
+                      className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 rounded-full"
+                    >
+                      {apiKeyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                </SettingsRow>
+              ) : null}
+            </>
+          ) : null}
+        </SettingsGroup>
+        {!apiDefaults.installed && !apiDefaults.running ? (
+          <p className="mt-2 text-[11.5px] text-muted-foreground">
+            {tx("settings.api.autoInstall", "API support will be installed automatically when you start it.")}
+          </p>
+        ) : null}
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.observability.title", "Observability")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title="Langfuse"
+            description={
+              settings.observability?.configured
+                ? tx("settings.observability.configured", "Tracing credentials are available to nanobot.")
+                : tx(
+                    "settings.observability.environment",
+                    "Set LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY, then restart nanobot.",
+                  )
+            }
+          >
+            {capabilitiesLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />
+            ) : langfuseFeature?.installed ? (
+              <StatusPill tone={settings.observability?.configured ? "success" : "neutral"}>
+                {settings.observability?.configured
+                  ? tx("settings.values.ready", "Ready")
+                  : tx("settings.values.needsSetup", "Needs setup")}
+              </StatusPill>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={capabilityAction === "enable:langfuse"}
+                onClick={() => onInstallCapability("langfuse")}
+                className="rounded-full"
+              >
+                {capabilityAction === "enable:langfuse" ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : null}
+                {capabilityAction === "enable:langfuse"
+                  ? tx("settings.capabilities.installing", "Installing support...")
+                  : tx("settings.observability.enable", "Enable tracing support")}
+              </Button>
+            )}
+          </SettingsRow>
+        </SettingsGroup>
+        {capabilityError ? <p className="mt-2 text-[12px] text-destructive">{capabilityError}</p> : null}
+      </section>
 
       <section>
         <SettingsSectionTitle>{t("settings.sections.system")}</SettingsSectionTitle>
@@ -6766,15 +7765,23 @@ function ModelIdPicker({
   token,
   settings,
   provider,
+  models,
   value,
   showProviderLogos,
+  emptyLabel,
+  searchPlaceholder,
+  emptyMessage,
   onChange,
 }: {
   token: string;
   settings: SettingsPayload;
   provider: string;
+  models?: string[];
   value: string;
   showProviderLogos: boolean;
+  emptyLabel?: string;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
   onChange: (model: string) => void;
 }) {
   const { t } = useTranslation();
@@ -6787,19 +7794,29 @@ function ModelIdPicker({
   const effectiveProvider =
     provider === "auto" ? settings.agent.resolved_provider ?? provider : provider;
   const hasConcreteProvider = Boolean(effectiveProvider && effectiveProvider !== "auto");
+  const hasStaticModels = models !== undefined;
   const providerRow = settingsProviderRow(settings, effectiveProvider);
   const providerConfigured = settingsProviderConfigured(settings, effectiveProvider);
-  const providerRequiresConfiguration = hasConcreteProvider && !providerConfigured;
+  const providerRequiresConfiguration =
+    !hasStaticModels && hasConcreteProvider && !providerConfigured;
+  const providerHasBuiltinModels = providerRow?.model_catalog === "builtin";
   const providerUsesManualModelIds =
-    hasConcreteProvider && providerConfigured && providerRow?.auth_type === "oauth";
+    !hasStaticModels &&
+    hasConcreteProvider &&
+    providerConfigured &&
+    providerRow?.auth_type === "oauth" &&
+    !providerHasBuiltinModels;
   const canFetchModels =
+    !hasStaticModels &&
     hasConcreteProvider && providerConfigured && !providerUsesManualModelIds;
   const normalizedQuery = query.trim().toLowerCase();
-  const providerModels = payload?.models ?? [];
+  const providerModels: ProviderModelsPayload["models"] = hasStaticModels
+    ? (models?.map((id) => ({ id })) ?? [])
+    : (payload?.models ?? []);
   const visibleModels = providerModels
     .filter((model) => {
       if (!normalizedQuery) return true;
-      return [model.id, model.label ?? "", model.owned_by ?? ""]
+      return [model.id, model.label ?? "", model.description ?? "", model.owned_by ?? ""]
         .some((field) => field.toLowerCase().includes(normalizedQuery));
     })
     .slice(0, 80);
@@ -6811,8 +7828,10 @@ function ModelIdPicker({
     canFetchModels && (!defersModelList || hasDeferredSearchQuery);
   const waitingForModelSearch =
     open && canFetchModels && defersModelList && !hasDeferredSearchQuery;
-  const hasModelList = payload?.status === "available";
-  const showModels = Boolean(hasModelList && payload && (!isCatalog || normalizedQuery));
+  const hasModelList = hasStaticModels || payload?.status === "available";
+  const showModels = Boolean(
+    hasModelList && (hasStaticModels || (payload && (!isCatalog || normalizedQuery))),
+  );
   const customCandidate = query.trim();
   const allowCustomModel = !providerRequiresConfiguration;
   const exactQueryMatch = providerModels.some((model) => model.id === customCandidate);
@@ -6874,8 +7893,17 @@ function ModelIdPicker({
           showBrandLogos={showProviderLogos}
           unconfigured={!providerConfigured}
         />
-        <span className="min-w-0 truncate font-medium text-foreground">
-          {model.label ?? model.id}
+        <span className="min-w-0">
+          <span className="block truncate font-medium text-foreground">
+            {model.label ?? model.id}
+          </span>
+          {model.description || (model.label && model.label !== model.id) ? (
+            <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
+              {[model.label && model.label !== model.id ? model.id : null, model.description]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          ) : null}
         </span>
       </span>
       <span className="ml-2 flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
@@ -6908,7 +7936,7 @@ function ModelIdPicker({
                 value ? "text-foreground" : "text-muted-foreground",
               )}
             >
-              {value || tx("settings.models.selectModel", "Select model")}
+              {value || emptyLabel || tx("settings.models.selectModel", "Select model")}
             </span>
           </span>
           <ChevronDown className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
@@ -6927,8 +7955,19 @@ function ModelIdPicker({
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => event.stopPropagation()}
-              placeholder={tx("settings.models.searchModels", "Search or type model ID")}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "Enter" && allowCustomModel && customCandidate) {
+                  event.preventDefault();
+                  selectModel(customCandidate);
+                }
+              }}
+              placeholder={
+                searchPlaceholder || tx("settings.models.searchModels", "Search or type model ID")
+              }
+              aria-label={
+                searchPlaceholder || tx("settings.models.searchModels", "Search or type model ID")
+              }
               className="h-8 rounded-full pl-8 pr-3 text-[12px]"
             />
           </div>
@@ -6937,6 +7976,10 @@ function ModelIdPicker({
         {providerRequiresConfiguration ? (
           <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
             {tx("settings.models.providerNotConfigured", "Configure this provider before loading models.")}
+          </div>
+        ) : hasStaticModels && !providerModels.length ? (
+          <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+            {emptyMessage || tx("settings.models.unsupportedModelList", "Type a model ID manually.")}
           </div>
         ) : providerUsesManualModelIds ? (
           <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
@@ -7029,12 +8072,9 @@ function ProviderPickerIcon({
   showBrandLogos: boolean;
   unconfigured?: boolean;
 }) {
-  const [logoIndex, setLogoIndex] = useState(0);
   const brand = providerBrand(provider);
   const Icon = PROVIDER_ICONS[provider] ?? Hexagon;
-  const logoUrl = brand?.logoUrls[logoIndex];
-
-  useEffect(() => setLogoIndex(0), [provider]);
+  const { logoUrl, onLogoError, onLogoLoad } = useLogoFallback(brand?.logoUrls);
 
   if (unconfigured) {
     return (
@@ -7052,15 +8092,17 @@ function ProviderPickerIcon({
     return (
       <span
         data-testid={`provider-picker-logo-${provider}`}
-        className="grid h-5 w-5 shrink-0 place-items-center overflow-hidden rounded-md border border-border/35 bg-background shadow-[inset_0_0_0_1px_rgba(0,0,0,0.02)]"
-        style={{ boxShadow: `inset 0 0 0 1px ${brand.color}22` }}
+        className="grid h-5 w-5 shrink-0 place-items-center overflow-hidden rounded-md border border-border/35 bg-background"
         aria-hidden
       >
         <img
           src={logoUrl}
           alt=""
+          decoding="async"
+          loading="lazy"
           className="h-3.5 w-3.5 object-contain"
-          onError={() => setLogoIndex((index) => index + 1)}
+          onLoad={onLogoLoad}
+          onError={onLogoError}
         />
       </span>
     );
@@ -7070,7 +8112,7 @@ function ProviderPickerIcon({
     return (
       <span
         data-testid={`provider-picker-logo-fallback-${provider}`}
-        className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-[7.5px] font-semibold text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]"
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-[7.5px] font-semibold text-white"
         style={{ backgroundColor: brand.color }}
         aria-hidden
       >
@@ -7103,7 +8145,7 @@ function ProviderSection({
   return (
     <section className="space-y-3">
       <ByokSectionHeader title={title} count={count} />
-      <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86 shadow-[0_18px_65px_rgba(15,23,42,0.07)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_18px_65px_rgba(0,0,0,0.22)]">
+      <div className="overflow-hidden rounded-[22px] bg-settings-surface">
         {count > 0 ? (
           <div className="divide-y divide-border/45">{children}</div>
         ) : (
@@ -7276,6 +8318,7 @@ const PROVIDER_ICONS: Record<string, LucideIcon> = {
   deepseek: Waves,
   zhipu: Grid3X3,
   dashscope: Cloud,
+  modelscope: Layers,
   moonshot: Moon,
   minimax: Zap,
   minimax_anthropic: Brain,
@@ -7316,25 +8359,24 @@ function ProviderIcon({
   provider: string;
   showBrandLogos: boolean;
 }) {
-  const [logoIndex, setLogoIndex] = useState(0);
   const brand = providerBrand(provider);
   const Icon = PROVIDER_ICONS[provider] ?? Hexagon;
-  const logoUrl = brand?.logoUrls[logoIndex];
-
-  useEffect(() => setLogoIndex(0), [provider]);
+  const { logoUrl, onLogoError, onLogoLoad } = useLogoFallback(brand?.logoUrls);
 
   if (showBrandLogos && logoUrl) {
     return (
       <span
         data-testid={`provider-logo-${provider}`}
-        className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-[14px] border border-border/45 bg-background shadow-[inset_0_0_0_1px_rgba(0,0,0,0.025)]"
-        style={{ boxShadow: `inset 0 0 0 1px ${brand.color}22` }}
+        className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-[14px] border border-border/45 bg-background"
       >
         <img
           src={logoUrl}
           alt=""
+          decoding="async"
+          loading="lazy"
           className="h-6 w-6 object-contain"
-          onError={() => setLogoIndex((index) => index + 1)}
+          onLoad={onLogoLoad}
+          onError={onLogoError}
         />
       </span>
     );
@@ -7343,7 +8385,7 @@ function ProviderIcon({
     return (
       <span
         data-testid={`provider-logo-fallback-${provider}`}
-        className="grid h-10 w-10 shrink-0 place-items-center rounded-[14px] text-[11px] font-semibold text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]"
+        className="grid h-10 w-10 shrink-0 place-items-center rounded-[14px] text-[11px] font-semibold text-white"
         style={{ backgroundColor: brand.color }}
         aria-hidden
       >
@@ -7352,7 +8394,7 @@ function ProviderIcon({
     );
   }
   return (
-    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-muted text-foreground/82 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.025)] dark:bg-muted/70">
+    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-muted text-foreground/82 dark:bg-muted/70">
       <Icon className="h-5 w-5" strokeWidth={2} aria-hidden />
     </span>
   );
@@ -7377,11 +8419,8 @@ function OverviewValueLogo({
   provider: string | null | undefined;
   showBrandLogos: boolean;
 }) {
-  const [logoIndex, setLogoIndex] = useState(0);
   const brand = provider ? providerBrand(provider) : null;
-  const logoUrl = brand?.logoUrls[logoIndex];
-
-  useEffect(() => setLogoIndex(0), [provider]);
+  const { logoUrl, onLogoError, onLogoLoad } = useLogoFallback(brand?.logoUrls);
 
   if (!provider || !showBrandLogos || !brand) return null;
 
@@ -7389,15 +8428,17 @@ function OverviewValueLogo({
     return (
       <span
         data-testid={`overview-logo-${provider}`}
-        className="grid h-5 w-5 shrink-0 place-items-center overflow-hidden rounded-md border border-border/35 bg-background shadow-[inset_0_0_0_1px_rgba(0,0,0,0.02)]"
-        style={{ boxShadow: `inset 0 0 0 1px ${brand.color}22` }}
+        className="grid h-5 w-5 shrink-0 place-items-center overflow-hidden rounded-md border border-border/35 bg-background"
         aria-hidden
       >
         <img
           src={logoUrl}
           alt=""
+          decoding="async"
+          loading="lazy"
           className="h-3.5 w-3.5 object-contain"
-          onError={() => setLogoIndex((index) => index + 1)}
+          onLoad={onLogoLoad}
+          onError={onLogoError}
         />
       </span>
     );
@@ -7406,7 +8447,7 @@ function OverviewValueLogo({
   return (
     <span
       data-testid={`overview-logo-fallback-${provider}`}
-      className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-[7.5px] font-semibold text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]"
+      className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-[7.5px] font-semibold text-white"
       style={{ backgroundColor: brand.color }}
       aria-hidden
     >
@@ -7467,7 +8508,7 @@ function SettingsSectionTitle({ children }: { children: ReactNode }) {
 
 function SettingsGroup({ children }: { children: ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86 shadow-[0_18px_65px_rgba(15,23,42,0.075)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_18px_65px_rgba(0,0,0,0.24)]">
+    <div className="overflow-hidden rounded-[22px] bg-settings-surface">
       <div className="divide-y divide-border/45">{children}</div>
     </div>
   );
@@ -7559,6 +8600,7 @@ function ModelPresetPicker({
               settings={settings}
               draftModel={draftModel}
               draftProvider={draftProvider}
+              useDraft={selectedPreset.is_default}
               forceUnconfigured={selectedPreset?.is_default ? !providerConfigured : undefined}
               showProviderLogos={showProviderLogos}
               compact
@@ -7592,6 +8634,7 @@ function ModelPresetPicker({
                 settings={settings}
                 draftModel={draftModel}
                 draftProvider={draftProvider}
+                useDraft={selected && preset.is_default}
                 showProviderLogos={showProviderLogos}
               />
               {selected ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden /> : null}
@@ -7624,6 +8667,7 @@ function ModelPresetOptionContent({
   settings,
   draftModel,
   draftProvider,
+  useDraft = false,
   forceUnconfigured,
   showProviderLogos,
   compact = false,
@@ -7632,6 +8676,7 @@ function ModelPresetOptionContent({
   settings: SettingsPayload;
   draftModel: string;
   draftProvider: string;
+  useDraft?: boolean;
   forceUnconfigured?: boolean;
   showProviderLogos: boolean;
   compact?: boolean;
@@ -7639,9 +8684,9 @@ function ModelPresetOptionContent({
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const provider = modelPresetProviderKey(preset, settings, {
-    draftProvider: preset.is_default ? draftProvider : undefined,
+    draftProvider: preset.is_default && useDraft ? draftProvider : undefined,
   });
-  const model = preset.is_default ? draftModel : preset.model;
+  const model = preset.is_default && useDraft ? draftModel : preset.model;
   const providerName = providerDisplayLabel(settings.providers, provider);
   const providerConfigured =
     forceUnconfigured === undefined
@@ -7709,7 +8754,7 @@ function RestartSettingsFooter({
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const isNativeHost = getHostApi() !== null;
+  const isNativeHost = isNativeRuntime();
   const restartLabel = isNativeHost
     ? tx("app.system.restartEngine", "Restart engine")
     : t("app.system.restart");
@@ -7831,7 +8876,7 @@ function SettingsStatusMessage({
           className={cn(
             "h-1.5 w-1.5 shrink-0 rounded-full",
             tone === "accent" &&
-              "bg-blue-500 shadow-[0_0_0_3px_rgba(59,130,246,0.14)] dark:bg-blue-400 dark:shadow-[0_0_0_3px_rgba(96,165,250,0.18)]",
+              "bg-blue-500 dark:bg-blue-400",
             tone === "danger" && "bg-destructive/70",
           )}
           aria-hidden
@@ -7878,55 +8923,18 @@ function SegmentedControl({
         <button
           key={option.value}
           type="button"
+          aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
             "rounded-full px-3 py-1 transition-colors",
-            value === option.value && "bg-background text-foreground shadow-sm",
+            value === option.value &&
+              "bg-background text-foreground ring-1 ring-inset ring-border/45",
           )}
         >
           {option.label}
         </button>
       ))}
     </div>
-  );
-}
-
-function ToggleButton({
-  checked,
-  onChange,
-  ariaLabel,
-  label,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  ariaLabel?: string;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={ariaLabel ?? label}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full p-[2px]",
-        "transition-colors duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-        checked
-          ? "bg-[#2997FF] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.035)]"
-          : "bg-muted shadow-[inset_0_0_0_1px_rgba(0,0,0,0.035)] hover:bg-muted/80",
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          "h-[18px] w-[18px] rounded-full bg-background shadow-[0_1px_2px_rgba(0,0,0,0.18),0_2px_7px_rgba(0,0,0,0.11)]",
-          "transition-transform duration-200 ease-out",
-          checked ? "translate-x-[16px]" : "translate-x-0",
-        )}
-      />
-      <span className="sr-only">{label}</span>
-    </button>
   );
 }
 
