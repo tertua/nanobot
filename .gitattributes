@@ -3,3 +3,4 @@
 docs/ merge=ours
 tests/ merge=ours
 webui/src/i18n/locales merge=ours
+README.md merge=ours
