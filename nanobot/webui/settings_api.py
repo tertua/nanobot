@@ -24,7 +24,7 @@ from nanobot.audio.transcription_registry import (
     resolve_transcription_provider,
     transcription_provider_names,
 )
-from nanobot.config.loader import get_config_path, load_config, resolve_config_env_vars, save_config
+from nanobot.config.loader import get_config_path, get_provider_whitelist, load_config, resolve_config_env_vars, save_config
 from nanobot.config.schema import ModelPresetConfig, ProviderConfig
 from nanobot.providers.image_generation import (
     get_image_gen_provider,
@@ -416,6 +416,7 @@ def _provider_settings_row(
 
 def _provider_settings_rows(config: Any, selected_provider: str | None) -> list[dict[str, Any]]:
     """Return one Settings row per provider family while preserving legacy configs."""
+    whitelist = get_provider_whitelist()
     aliases: dict[str, list[Any]] = {}
     for spec in PROVIDERS:
         if spec.settings_alias_for:
@@ -424,6 +425,8 @@ def _provider_settings_rows(config: Any, selected_provider: str | None) -> list[
     rows: list[dict[str, Any]] = []
     for canonical in PROVIDERS:
         if canonical.settings_alias_for:
+            continue
+        if canonical.name not in whitelist and canonical.name != selected_provider:
             continue
         candidates = [canonical, *aliases.get(canonical.name, [])]
         chosen = next((spec for spec in candidates if spec.name == selected_provider), None)

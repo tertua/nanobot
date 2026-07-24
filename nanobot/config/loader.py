@@ -84,6 +84,11 @@ Providers not in this set are omitted from the output.
 See nanobot/config/schema.py ProvidersConfig for the full list.
 """
 
+
+def get_provider_whitelist() -> set[str]:
+    """Return a copy of the provider whitelist used by settings and config save."""
+    return _PROVIDER_WHITELIST.copy()
+
 _CHANNEL_WHITELIST: set[str] = {
     "telegram",
     "whatsapp",
