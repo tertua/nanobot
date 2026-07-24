@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # nanobot Task Guides
 
 Start with [Install and Quick Start](../quick-start.md) and get one reply before using a guide below. Each guide targets one outcome; linked reference pages hold the complete option tables and edge cases.

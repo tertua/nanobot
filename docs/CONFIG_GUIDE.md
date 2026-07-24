@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Configuration Guide
 
 > Dokumentasi ini dibuat dari source code analysis (`nanobot/config/schema.py`).

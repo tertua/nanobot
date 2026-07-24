@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Build a Discord AI Agent with nanobot
 
 This guide connects nanobot to Discord so a Discord user or server channel can

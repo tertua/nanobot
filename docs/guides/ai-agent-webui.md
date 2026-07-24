@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Use an AI Agent WebUI with nanobot
 
 nanobot includes a browser WebUI for persistent chat sessions, visible agent

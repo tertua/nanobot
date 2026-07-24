@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Configure Langfuse Observability for nanobot
 
 nanobot can trace supported OpenAI-compatible provider calls through Langfuse's

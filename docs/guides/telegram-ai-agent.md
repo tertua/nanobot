@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Connect Telegram to nanobot
 
 This guide connects one Telegram bot to nanobot. Messages sent to that bot use

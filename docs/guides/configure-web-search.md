@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Configure Web Search for a nanobot AI Agent
 
 nanobot includes built-in web search and web fetch tools. Search uses

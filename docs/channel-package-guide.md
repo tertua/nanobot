@@ -1,3 +1,7 @@
+---
+> **Upstream doc** — from `HKUDS/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Channel Package Guide
 
 Use this guide to add a self-contained channel package to the nanobot repository. A channel is part of nanobot when its package lives at `nanobot/channels/<channel>/`; there is no separate external channel-plugin path.

@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Run a Self-Hosted AI Agent with nanobot
 
 This guide sets up nanobot as a self-hosted AI agent runtime on your own

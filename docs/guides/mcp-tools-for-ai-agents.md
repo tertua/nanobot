@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Add MCP Tools to an AI Agent with nanobot
 
 nanobot can connect MCP servers and expose their tools to the agent alongside

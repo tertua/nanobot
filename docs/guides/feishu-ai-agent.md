@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Build a Feishu AI Agent with nanobot
 
 This guide connects nanobot to Feishu or Lark through the `feishu` channel. The

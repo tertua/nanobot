@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Deploy a Long-Running nanobot AI Agent Gateway
 
 The nanobot gateway is the long-running self-hosted AI agent process that keeps

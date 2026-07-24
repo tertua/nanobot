@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Secure a Local AI Agent with nanobot
 
 This guide covers the practical controls to review before letting a nanobot

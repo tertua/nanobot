@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Configure an OpenAI-Compatible Provider in nanobot
 
 nanobot can call OpenAI-compatible model providers by configuring an `apiBase`,

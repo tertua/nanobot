@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Build a QQ AI Agent with nanobot
 
 This guide connects nanobot to QQ through the official `qq` channel. The

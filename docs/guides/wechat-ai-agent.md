@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Build a WeChat AI Agent with nanobot
 
 This guide connects nanobot to WeChat through the `weixin` channel. The channel

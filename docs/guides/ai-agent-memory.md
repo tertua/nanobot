@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How AI Agent Memory Works in nanobot
 
 This guide explains how to use nanobot's long-term AI agent memory: session

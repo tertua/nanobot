@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Configure Model Fallback in nanobot
 
 Model fallback lets nanobot try a primary model first, then fall back to one or

@@ -105,3 +105,60 @@ Jika ingin mengembangkan lebih lanjut:
 1. Pertimbangkan menambahkan kembali tests yang relevan
 2. Dokumentasi ini dapat membantu memahami codebase
 3. WebUI berfungsi penuh dengan fitur upstream
+
+---
+
+## 7. Doc Manifest
+
+Setiap file docs memiliki header yang menandai asalnya: **Fork doc** atau **Upstream doc**.
+
+### Fork docs (maintained by tertua/nanobot)
+
+| File | Catatan |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Tidak berubah dari fork |
+| `docs/CONFIG_GUIDE.md` | Tidak berubah dari fork |
+| `docs/FORK_NOTES.md` | File ini |
+| `docs/SKILL_GUIDE.md` | Tidak berubah dari fork |
+| `docs/TURN_LIFECYCLE.md` | Tidak berubah dari fork |
+| `docs/release-archive.md` | Dimodifikasi oleh merge upstream |
+| `docs/guides/README.md` | Dimodifikasi oleh merge upstream |
+| `docs/guides/ai-agent-memory.md` | Tidak berubah |
+| `docs/guides/ai-agent-webui.md` | Tidak berubah |
+| `docs/guides/build-a-personal-ai-agent.md` | Tidak berubah |
+| `docs/guides/chat-app-ai-agent.md` | Dimodifikasi oleh merge upstream |
+| `docs/guides/configure-langfuse-observability.md` | Tidak berubah |
+| `docs/guides/configure-mcp-tools.md` | Dimodifikasi oleh merge upstream |
+| `docs/guides/configure-model-fallback.md` | Tidak berubah |
+| `docs/guides/configure-openai-compatible-provider.md` | Tidak berubah |
+| `docs/guides/configure-web-search.md` | Dimodifikasi oleh merge upstream |
+| `docs/guides/deploy-nanobot-gateway.md` | Tidak berubah |
+| `docs/guides/discord-ai-agent.md` | Tidak berubah |
+| `docs/guides/email-ai-agent.md` | Tidak berubah |
+| `docs/guides/feishu-ai-agent.md` | Tidak berubah |
+| `docs/guides/long-running-ai-agent.md` | Dimodifikasi oleh merge upstream |
+| `docs/guides/mattermost-ai-agent.md` | Tidak berubah |
+| `docs/guides/mcp-tools-for-ai-agents.md` | Tidak berubah |
+| `docs/guides/openai-compatible-agent-api.md` | Tidak berubah |
+| `docs/guides/python-ai-agent-sdk.md` | Tidak berubah |
+| `docs/guides/qq-ai-agent.md` | Tidak berubah |
+| `docs/guides/secure-local-ai-agent.md` | Tidak berubah |
+| `docs/guides/self-hosted-ai-agent.md` | Tidak berubah |
+| `docs/guides/slack-ai-agent.md` | Tidak berubah |
+| `docs/guides/telegram-ai-agent.md` | Dimodifikasi oleh merge upstream |
+| `docs/guides/wechat-ai-agent.md` | Tidak berubah |
+| `docs/guides/whatsapp-ai-agent.md` | Tidak berubah |
+
+### Upstream docs (from HKUDS/nanobot)
+
+| File | Asal |
+|------|------|
+| `docs/automations.md` | Baru dari upstream |
+| `docs/channel-package-guide.md` | Baru dari upstream |
+| `docs/guides/configure-ollama-prompt-cache.md` | Baru dari upstream |
+
+### Aturan
+
+- **Fork doc**: Jangan edit tanpa pertimbangan — ini dokumen kustom fork.
+- **Upstream doc**: Boleh diedit/dihapus — bukan milik fork. Namun jika dihapus, akan conflict saat merge upstream berikutnya.
+- Jika ragu, cek header di baris pertama file.

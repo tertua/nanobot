@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Nanobot Python SDK: Run an AI Agent from Python
 
 This guide shows when to use the Nanobot Python SDK instead of calling a model

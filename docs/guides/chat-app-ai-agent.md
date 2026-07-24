@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Connect an AI Agent to Chat Apps with nanobot
 
 nanobot can run as a self-hosted chatbot or AI agent in Telegram, Discord,

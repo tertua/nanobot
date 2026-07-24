@@ -1,3 +1,7 @@
+---
+> **Upstream doc** — from `HKUDS/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # Automations
 
 <!-- Meta description: Create, run, and manage nanobot scheduled automations, local triggers, and heartbeat-backed background checks. -->

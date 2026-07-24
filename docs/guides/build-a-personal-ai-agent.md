@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Build a Personal AI Agent with nanobot
 
 This guide builds a personal AI agent you can run locally, talk to from the

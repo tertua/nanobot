@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Run an OpenAI-Compatible Agent API with nanobot
 
 nanobot can expose a local OpenAI-compatible endpoint behind

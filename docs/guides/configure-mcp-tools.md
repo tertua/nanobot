@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Configure MCP Tools in nanobot
 
 This guide adds an MCP server to nanobot so the agent can use external tools

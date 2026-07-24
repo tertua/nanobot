@@ -1,3 +1,7 @@
+---
+> **Upstream doc** — from `HKUDS/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Improve Ollama Tool-Calling Prompt Cache Reuse in nanobot
 
 Some Ollama model templates move or remove tool definitions as a conversation

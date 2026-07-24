@@ -1,3 +1,7 @@
+---
+> **Fork doc** — maintained by `tertua/nanobot`. See `FORK_NOTES.md` for the full manifest.
+---
+
 # How to Run a Long-Running AI Agent with nanobot
 
 nanobot can keep agent work alive across turns through sustained goals,
