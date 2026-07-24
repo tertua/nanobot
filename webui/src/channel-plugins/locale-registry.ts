@@ -26,7 +26,7 @@ for (const [modulePath, module] of Object.entries(modules)) {
   }
   const [, channel, locale] = match;
   if (!supportedLocaleCodes.has(locale)) {
-    throw new Error(`Channel '${channel}' has unsupported locale '${locale}'`);
+    continue;
   }
   const translations = translationsByChannel.get(channel) ?? new Map();
   if (translations.has(locale as SupportedLocale)) {
