@@ -14,6 +14,7 @@ import { channelUiPresentation } from "@/channel-plugins/registry";
 import { Sidebar } from "@/components/Sidebar";
 import type { SettingsSectionKey } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import { floatingSurfaceElevationClassName } from "@/components/ui/floating-surface";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
@@ -61,6 +62,11 @@ import {
   toRuntimeSurface,
 } from "@/lib/runtime";
 import { projectNameFromPath } from "@/lib/workspace";
+import {
+  createTemporaryChatSession,
+  isTemporaryChatId,
+  TEMPORARY_CHAT_ROUTE_KEY,
+} from "@/lib/temporary-chat";
 
 type BootState =
   | { status: "loading" }
@@ -70,7 +76,7 @@ type BootState =
       status: "ready";
       client: NanobotClient;
       token: string;
-      tokenExpiresAt: number;
+      tokenExpiresAt: number | null;
       modelName: string | null;
       ingressLimits: BootstrapResponse["limits"] | null;
       runtimeSurface: RuntimeSurface;
@@ -116,12 +122,13 @@ const RenameChatDialog = lazy(async () => {
 });
 
 function SurfaceLoadingFallback() {
+  const { t } = useTranslation();
   return (
     <div
       aria-busy="true"
       className="flex h-full w-full flex-col gap-5 px-5 py-8 sm:px-8 lg:px-12"
     >
-      <span className="sr-only">Loading</span>
+      <span className="sr-only">{t("settings.status.loading")}</span>
       <div className="h-4 w-20 animate-pulse rounded bg-muted/70 motion-reduce:animate-none" />
       <div className="h-9 w-48 animate-pulse rounded bg-muted/70 motion-reduce:animate-none" />
       <div className="mt-4 h-12 w-full max-w-3xl animate-pulse rounded-md bg-muted/55 motion-reduce:animate-none" />
@@ -225,6 +232,13 @@ function readShellRoute(): ShellRoute {
   if (path === "/skills") {
     return { view: "skills", activeKey, settingsSection: "skills" };
   }
+  if (path === "/temporary") {
+    return {
+      view: "chat",
+      activeKey: TEMPORARY_CHAT_ROUTE_KEY,
+      settingsSection: "overview",
+    };
+  }
   if (path.startsWith("/chat/")) {
     const encoded = path.slice("/chat/".length);
     try {
@@ -241,6 +255,7 @@ function readShellRoute(): ShellRoute {
 
 function shellRouteHash(route: ShellRoute): string {
   if (route.view === "chat") {
+    if (route.activeKey === TEMPORARY_CHAT_ROUTE_KEY) return "#/temporary";
     return route.activeKey
       ? `#/chat/${encodeURIComponent(route.activeKey)}`
       : "#/new";
@@ -478,8 +493,8 @@ function PairingCodePopup({
       className={cn(
         "fixed right-4 top-[calc(0.75rem+env(safe-area-inset-top))] z-[70]",
         "w-[min(calc(100vw-2rem),24rem)] rounded-[24px]",
-        "border border-border/70 bg-popover/95 p-4 text-popover-foreground",
-        "shadow-[0_24px_70px_rgba(15,23,42,0.20)] backdrop-blur-xl",
+        floatingSurfaceElevationClassName,
+        "p-4",
         "animate-in fade-in-0 slide-in-from-top-2 duration-200",
       )}
     >
@@ -732,17 +747,20 @@ export default function App() {
         ? toRuntimeSurface(boot.runtime_surface)
         : fallbackSurface;
       const runtimeHost = createRuntimeHost(runtimeSurface, boot.runtime_capabilities);
-      const tokenExpiresAt = bootstrapTokenExpiresAt(boot.expires_in);
+      const tokenExpiresAt = boot.expires_in
+        ? bootstrapTokenExpiresAt(boot.expires_in)
+        : null;
       if (runtimeHost.socketFactory) {
         client.updateUrl(url, runtimeHost.socketFactory);
       } else {
         client.updateUrl(url);
       }
+      client.updateMaxFrameBytes(boot.limits?.transport.max_frame_bytes);
       setState((current) =>
         current.status === "ready" && current.client === client
           ? {
               ...current,
-              token: boot.api_token,
+              token: boot.api_token ?? "",
               tokenExpiresAt,
               modelName: boot.model_name ?? current.modelName,
               ingressLimits: boot.limits ?? current.ingressLimits,
@@ -750,7 +768,7 @@ export default function App() {
             }
           : current,
       );
-      return { token: boot.api_token, url };
+      return { token: boot.api_token ?? "", url };
     },
     [],
   );
@@ -769,6 +787,7 @@ export default function App() {
           const runtimeHost = createRuntimeHost(runtimeSurface, boot.runtime_capabilities);
           const client = new NanobotClient({
             url,
+            maxFrameBytes: boot.limits?.transport.max_frame_bytes,
             socketFactory: runtimeHost.socketFactory,
             onReauth: async () => {
               try {
@@ -784,8 +803,10 @@ export default function App() {
           setState({
             status: "ready",
             client,
-            token: boot.api_token,
-            tokenExpiresAt: bootstrapTokenExpiresAt(boot.expires_in),
+            token: boot.api_token ?? "",
+            tokenExpiresAt: boot.expires_in
+              ? bootstrapTokenExpiresAt(boot.expires_in)
+              : null,
             modelName: boot.model_name ?? null,
             ingressLimits: boot.limits ?? null,
             runtimeSurface,
@@ -810,7 +831,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (state.status !== "ready") return;
+    if (state.status !== "ready" || state.tokenExpiresAt === null) return;
     const client = state.client;
     const timer = window.setTimeout(async () => {
       try {
@@ -934,7 +955,7 @@ function Shell({
   onNativeEngineRestart: () => Promise<string>;
 }) {
   const { t, i18n } = useTranslation();
-  const { client, token } = useClient();
+  const { client, getToken } = useClient();
   const { theme, toggle } = useTheme();
   const {
     sessions,
@@ -953,6 +974,7 @@ function Shell({
     initialRouteRef.current.activeKey,
   );
   const [view, setView] = useState<ShellView>(initialRouteRef.current.view);
+  const [temporarySession, setTemporarySession] = useState<ChatSummary | null>(null);
   const [settingsInitialSection, setSettingsInitialSection] =
     useState<SettingsSectionKey>(initialRouteRef.current.settingsSection);
   const [hostSidebarOpen, setHostSidebarOpen] =
@@ -979,13 +1001,14 @@ function Shell({
   const [pairingRequests, setPairingRequests] = useState<PairingRequestInfo[]>([]);
   const [pairingBusyCode, setPairingBusyCode] = useState<string | null>(null);
   const [pairingError, setPairingError] = useState<string | null>(null);
+  const pairingRefreshRef = useRef<Promise<number> | null>(null);
   const [snoozedPairingCodes, setSnoozedPairingCodes] = useState<Map<string, number>>(
     () => new Map(),
   );
   const [runningChatIds, setRunningChatIds] = useState<Set<string>>(() => new Set());
   const [updatedChatIds, setUpdatedChatIds] = useState<Set<string>>(readSessionUpdateChatIds);
   const [workspaces, setWorkspaces] = useState<WorkspacesPayload | null>(null);
-  const skills = useSkills(token);
+  const skills = useSkills(getToken);
   const pageVisible = usePageVisibility();
   const [settingsSnapshot, setSettingsSnapshot] = useState<SettingsPayload | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -1000,6 +1023,8 @@ function Shell({
     settingsSnapshot?.surface ?? settingsSnapshot?.runtime_surface ?? runtimeSurface;
   const showHostChrome = effectiveRuntimeSurface === "native";
   const showMainSidebar = view !== "settings";
+  const temporaryChatActive = view === "chat" && activeKey === TEMPORARY_CHAT_ROUTE_KEY;
+  const temporaryChatId = temporarySession?.chatId ?? null;
 
   const navigate = useCallback(
     (route: ShellRoute, options?: { replace?: boolean }) => {
@@ -1027,8 +1052,21 @@ function Shell({
   }, []);
 
   useEffect(() => {
+    if (temporaryChatActive) {
+      if (!temporarySession) setTemporarySession(createTemporaryChatSession());
+      return;
+    }
+    if (temporarySession) setTemporarySession(null);
+  }, [temporaryChatActive, temporarySession]);
+
+  useEffect(() => {
+    if (!temporaryChatId) return;
+    return () => client.discardTemporaryChat(temporaryChatId);
+  }, [client, temporaryChatId]);
+
+  useEffect(() => {
     let cancelled = false;
-    fetchSettings(token)
+    fetchSettings(getToken())
       .then((payload) => {
         if (!cancelled) setSettingsSnapshot(payload);
       })
@@ -1038,7 +1076,7 @@ function Shell({
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [getToken]);
 
   useEffect(() => {
     try {
@@ -1055,29 +1093,39 @@ function Shell({
     writeSessionUpdateChatIds(updatedChatIds);
   }, [updatedChatIds]);
 
-  const refreshPairingRequests = useCallback(async (): Promise<number> => {
-    try {
-      const payload = await fetchPairingRequests(token);
-      const requests = Array.isArray(payload.requests) ? payload.requests : [];
-      setPairingRequests(requests);
-      setSnoozedPairingCodes((current) => {
-        if (current.size === 0) return current;
-        const activeCodes = new Set(requests.map((request) => request.code));
-        const now = Date.now();
-        const next = new Map(
-          Array.from(current).filter(
-            ([code, snoozedUntil]) => activeCodes.has(code) && snoozedUntil > now,
-          ),
-        );
-        return next.size === current.size ? current : next;
-      });
-      return requests.length;
-    } catch {
-      // Pairing is an opportunistic WebUI affordance. The slash command path
-      // remains available if this polling request fails.
-      return 0;
-    }
-  }, [token]);
+  const refreshPairingRequests = useCallback((): Promise<number> => {
+    if (pairingRefreshRef.current) return pairingRefreshRef.current;
+
+    const request = (async () => {
+      try {
+        const payload = await fetchPairingRequests(getToken());
+        const requests = Array.isArray(payload.requests) ? payload.requests : [];
+        setPairingRequests(requests);
+        setSnoozedPairingCodes((current) => {
+          if (current.size === 0) return current;
+          const activeCodes = new Set(requests.map((request) => request.code));
+          const now = Date.now();
+          const next = new Map(
+            Array.from(current).filter(
+              ([code, snoozedUntil]) => activeCodes.has(code) && snoozedUntil > now,
+            ),
+          );
+          return next.size === current.size ? current : next;
+        });
+        return requests.length;
+      } catch {
+        // Pairing is an opportunistic WebUI affordance. The slash command path
+        // remains available if this polling request fails.
+        return 0;
+      }
+    })();
+    const clearRequest = () => {
+      if (pairingRefreshRef.current === request) pairingRefreshRef.current = null;
+    };
+    pairingRefreshRef.current = request;
+    void request.then(clearRequest, clearRequest);
+    return request;
+  }, [getToken]);
 
   useEffect(() => {
     if (!pageVisible) return undefined;
@@ -1101,8 +1149,9 @@ function Shell({
 
   const activeSession = useMemo<ChatSummary | null>(() => {
     if (!activeKey) return null;
+    if (activeKey === TEMPORARY_CHAT_ROUTE_KEY) return temporarySession;
     return sessions.find((s) => s.key === activeKey) ?? null;
-  }, [sessions, activeKey]);
+  }, [sessions, activeKey, temporarySession]);
   const runningChatIdList = useMemo(() => Array.from(runningChatIds), [runningChatIds]);
   const updatedChatIdList = useMemo(() => Array.from(updatedChatIds), [updatedChatIds]);
   const activeChatId = activeSession?.chatId ?? null;
@@ -1135,12 +1184,12 @@ function Shell({
 
   const refreshWorkspaces = useCallback(async () => {
     try {
-      const payload = await fetchWorkspaces(token);
+      const payload = await fetchWorkspaces(getToken());
       setWorkspaces(payload);
     } catch {
       setWorkspaces(null);
     }
-  }, [token]);
+  }, [getToken]);
 
   useEffect(() => {
     void refreshWorkspaces();
@@ -1162,7 +1211,7 @@ function Shell({
   }, [loading, sessions]);
 
   useEffect(() => {
-    if (loading || !activeKey) return;
+    if (loading || !activeKey || activeKey === TEMPORARY_CHAT_ROUTE_KEY) return;
     if (sessions.some((session) => session.key === activeKey)) return;
     const currentRoute = readShellRoute();
     navigate(
@@ -1206,6 +1255,7 @@ function Shell({
   useEffect(() => {
     return client.onError((error) => {
       if (error.kind !== "workspace_scope_rejected") return;
+      if (error.chatId && error.chatId !== activeChatIdRef.current) return;
       setWorkspaceError(t("errors.workspaceScopeRejected.body"));
       void refreshWorkspaces();
     });
@@ -1332,14 +1382,16 @@ function Shell({
       const next = normalizeWorkspaceScope(scope);
       setWorkspaceError(null);
       if (activeChatId) {
-        if (!activeChatRunning) {
+        if (temporaryChatActive) {
+          setTemporarySession((current) => current ? { ...current, workspaceScope: next } : current);
+        } else if (!activeChatRunning) {
           client.setWorkspaceScope(activeChatId, next);
         }
         return;
       }
       setDraftWorkspaceScope(next);
     },
-    [activeChatId, activeChatRunning, client],
+    [activeChatId, activeChatRunning, client, temporaryChatActive],
   );
 
   const onCreateChat = useCallback(async (workspaceScope?: WorkspaceScopePayload | null) => {
@@ -1402,6 +1454,19 @@ function Shell({
     setSessionSearchOpen(false);
     setMobileSidebarOpen(false);
   }, [navigate]);
+
+  const onOpenTemporaryChat = useCallback(() => {
+    if (temporaryChatActive) return;
+    setTemporarySession(createTemporaryChatSession());
+    setWorkspaceError(null);
+    setSessionSearchOpen(false);
+    navigate({
+      view: "chat",
+      activeKey: TEMPORARY_CHAT_ROUTE_KEY,
+      settingsSection: "overview",
+    });
+    setMobileSidebarOpen(false);
+  }, [navigate, temporaryChatActive]);
 
   const onNewChatInProject = useCallback(
     (projectPath: string, projectName: string) => {
@@ -1719,6 +1784,7 @@ function Shell({
       nextRunning.delete(chatId);
       runningChatIdsRef.current = nextRunning;
       setRunningChatIds(nextRunning);
+      if (isTemporaryChatId(chatId)) return;
       setUpdatedChatIds((current) => {
         const next = new Set(current);
         if (activeChatIdRef.current === chatId) {
@@ -1730,6 +1796,20 @@ function Shell({
       });
     });
   }, [client]);
+
+  useEffect(() => {
+    let wasOpen = client.status === "open";
+    return client.onStatus((status) => {
+      if (!temporaryChatId) return;
+      if (status === "open") {
+        wasOpen = true;
+        return;
+      }
+      if (!wasOpen) return;
+      setTemporarySession(null);
+      if (temporaryChatActive) navigate(defaultShellRoute(), { replace: true });
+    });
+  }, [client, navigate, temporaryChatActive, temporaryChatId]);
 
   useEffect(() => {
     return client.onStatus((status) => {
@@ -1759,7 +1839,10 @@ function Shell({
     });
   }, [client, t]);
 
-  const onTurnEnd = useDeferredTitleRefresh(activeSession, refresh);
+  const onTurnEnd = useDeferredTitleRefresh(
+    temporaryChatActive ? null : activeSession,
+    refresh,
+  );
 
   const onConfirmDelete = useCallback(async () => {
     if (!pendingDelete) return;
@@ -1821,7 +1904,7 @@ function Shell({
       setPairingBusyCode(code);
       setPairingError(null);
       try {
-        const payload = await runPairingAction(token, action, code);
+        const payload = await runPairingAction(getToken(), action, code);
         setPairingRequests(Array.isArray(payload.requests) ? payload.requests : []);
         setSnoozedPairingCodes((current) => {
           if (!current.has(code)) return current;
@@ -1836,7 +1919,7 @@ function Shell({
         setPairingBusyCode(null);
       }
     },
-    [refreshPairingRequests, token],
+    [getToken, refreshPairingRequests],
   );
 
   const onDismissPairingRequest = useCallback((code: string) => {
@@ -1849,7 +1932,9 @@ function Shell({
     });
   }, []);
 
-  const headerTitle = activeSession
+  const headerTitle = temporaryChatActive
+    ? t("temporaryChat.title")
+    : activeSession
     ? sidebarState.title_overrides[activeSession.key] ||
       activeSession.title ||
       deriveTitle(activeSession.preview, t("chat.newChat"))
@@ -1887,9 +1972,12 @@ function Shell({
 
   const sidebarProps = {
     sessions,
-    activeKey,
+    activeKey: view === "chat" ? activeKey : null,
     loading,
+    newChatActive: view === "chat" && activeKey === null,
+    temporaryChatActive,
     onNewChat,
+    onOpenTemporaryChat,
     onSelect: onSelectChat,
     onRequestDelete,
     onTogglePin,
@@ -2072,11 +2160,13 @@ function Shell({
             >
               <ThreadShell
                 session={activeSession}
+                sessions={sessions}
                 title={headerTitle}
+                temporary={temporaryChatActive}
                 onToggleSidebar={toggleSidebar}
                 onNewChat={onNewChat}
                 onCreateChat={onCreateChat}
-                onForkChat={onForkChat}
+                onForkChat={temporaryChatActive ? undefined : onForkChat}
                 onTurnEnd={onTurnEnd}
                 theme={theme}
                 onToggleTheme={toggle}
@@ -2107,7 +2197,6 @@ function Shell({
                     onModelNameChange={onModelNameChange}
                     onSettingsChange={setSettingsSnapshot}
                     skills={skills}
-                    onWorkspaceSettingsChange={refreshWorkspaces}
                     onSectionChange={onSettingsSectionChange}
                     onLogout={onLogout}
                     onRestart={onRestart}
@@ -2158,7 +2247,10 @@ function Shell({
         {restartToast ? (
           <div
             role="status"
-            className="fixed left-1/2 top-[calc(0.75rem+env(safe-area-inset-top))] z-50 max-w-[calc(100vw-1rem)] -translate-x-1/2 rounded-full border border-border/70 bg-popover px-4 py-2 text-sm font-medium text-popover-foreground shadow-lg"
+            className={cn(
+              floatingSurfaceElevationClassName,
+              "fixed left-1/2 top-[calc(0.75rem+env(safe-area-inset-top))] z-50 max-w-[calc(100vw-1rem)] -translate-x-1/2 rounded-full px-4 py-2 text-sm font-medium",
+            )}
           >
             {restartToast}
           </div>

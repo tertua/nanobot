@@ -1,8 +1,14 @@
-import { useState, type ReactNode } from "react";
+import {
+  type ReactNode,
+  type RefObject,
+  useRef,
+  useState,
+} from "react";
 import {
   Archive,
   Brain,
   CalendarClock,
+  MessageCircleDashed,
   Menu,
   Search,
   Settings,
@@ -13,6 +19,10 @@ import { useTranslation } from "react-i18next";
 
 import { ChatList } from "@/components/ChatList";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
+import {
+  SIDEBAR_SELECTION_ACTION_ITEM_CLASS,
+  SidebarSelectionHighlight,
+} from "@/components/SidebarSelectionHighlight";
 import { Button } from "@/components/ui/button";
 import type {
   ChatSummary,
@@ -24,7 +34,10 @@ interface SidebarProps {
   sessions: ChatSummary[];
   activeKey: string | null;
   loading: boolean;
+  newChatActive: boolean;
+  temporaryChatActive: boolean;
   onNewChat: () => void;
+  onOpenTemporaryChat: () => void;
   onSelect: (key: string) => void;
   onRequestDelete: (key: string, label: string) => void;
   onTogglePin: (key: string) => void;
@@ -82,6 +95,14 @@ export function Sidebar(props: SidebarProps) {
   const collapsed = Boolean(props.collapsed);
   const toggleLabel = t("thread.header.toggleSidebar");
   const newChatShortcut = newChatShortcutLabel();
+  const activeActionRef = useRef<HTMLButtonElement>(null);
+  const activeActionId = props.temporaryChatActive
+    ? "temporary-chat"
+    : props.newChatActive
+      ? "new-chat"
+    : props.activeUtility
+      ? `utility:${props.activeUtility}`
+      : null;
 
   return (
     <nav
@@ -133,9 +154,12 @@ export function Sidebar(props: SidebarProps) {
         )}
       </div>
 
-      <div
+      <SidebarSelectionHighlight
+        targetRef={activeActionRef}
+        activeId={activeActionId}
+        scope="actions"
         className={cn(
-          "space-y-1.5 px-2 pb-2",
+          "relative space-y-1.5 px-2 pb-2",
           collapsed && "flex w-14 flex-col items-center px-0",
         )}
       >
@@ -143,9 +167,19 @@ export function Sidebar(props: SidebarProps) {
           collapsed={collapsed}
           label={t("sidebar.newChat")}
           onClick={props.onNewChat}
+          active={props.newChatActive}
+          selectionRef={activeActionRef}
           icon={<SquarePen className="h-4 w-4" />}
           shortcut={newChatShortcut}
           ariaKeyShortcuts="Meta+Shift+O Control+Shift+O"
+        />
+        <SidebarActionButton
+          collapsed={collapsed}
+          label={t("temporaryChat.title")}
+          onClick={props.onOpenTemporaryChat}
+          active={props.temporaryChatActive}
+          selectionRef={activeActionRef}
+          icon={<MessageCircleDashed className="h-4 w-4" />}
         />
         <SidebarActionButton
           collapsed={collapsed}
@@ -159,6 +193,7 @@ export function Sidebar(props: SidebarProps) {
           onClick={props.onOpenApps}
           onIntent={props.onSettingsIntent}
           active={props.activeUtility === "apps"}
+          selectionRef={activeActionRef}
           icon={<Blocks className="h-4 w-4" />}
         />
         <SidebarActionButton
@@ -167,6 +202,7 @@ export function Sidebar(props: SidebarProps) {
           onClick={props.onOpenSkills}
           onIntent={props.onSettingsIntent}
           active={props.activeUtility === "skills"}
+          selectionRef={activeActionRef}
           icon={<Brain className="h-4 w-4" />}
         />
         <SidebarActionButton
@@ -175,6 +211,7 @@ export function Sidebar(props: SidebarProps) {
           onClick={props.onOpenAutomations}
           onIntent={props.onSettingsIntent}
           active={props.activeUtility === "automations"}
+          selectionRef={activeActionRef}
           icon={<CalendarClock className="h-4 w-4" />}
         />
         {props.archivedCount ? (
@@ -185,7 +222,7 @@ export function Sidebar(props: SidebarProps) {
             icon={<Archive className="h-4 w-4" />}
           />
         ) : null}
-      </div>
+      </SidebarSelectionHighlight>
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden transition-opacity duration-200",
@@ -255,6 +292,7 @@ function SidebarActionButton({
   shortcut,
   ariaKeyShortcuts,
   onIntent,
+  selectionRef,
 }: {
   collapsed: boolean;
   label: string;
@@ -265,13 +303,15 @@ function SidebarActionButton({
   shortcut?: string;
   ariaKeyShortcuts?: string;
   onIntent?: () => void;
+  selectionRef?: RefObject<HTMLButtonElement>;
 }) {
   const title = shortcut ? `${label} (${shortcut})` : collapsed ? label : undefined;
 
   return (
     <Button
+      ref={active ? selectionRef : undefined}
       type="button"
-      variant="ghost"
+      variant={null}
       aria-label={label}
       aria-current={active ? "page" : undefined}
       aria-keyshortcuts={ariaKeyShortcuts}
@@ -280,12 +320,14 @@ function SidebarActionButton({
       onFocus={onIntent}
       onPointerEnter={onIntent}
       className={cn(
-        "touch-target group h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-        "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
+        "touch-target group h-8 min-w-0 gap-2 overflow-hidden rounded-xl font-medium",
+        SIDEBAR_SELECTION_ACTION_ITEM_CLASS,
         collapsed
-          ? "w-9 justify-center gap-0 rounded-xl px-0"
+          ? "w-9 justify-center gap-0 px-0"
           : "w-full justify-start gap-2 px-3 text-[12.5px]",
-        active && "bg-sidebar-accent text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.55)]",
+        active
+          ? "text-sidebar-accent-foreground"
+          : "text-sidebar-foreground/85 hover:bg-sidebar-foreground/[0.035] hover:text-sidebar-foreground dark:hover:bg-white/[0.05]",
         className,
       )}
     >
