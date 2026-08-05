@@ -203,7 +203,7 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     """Cancel all active tasks and subagents for the session."""
     loop = ctx.loop
     msg = ctx.msg
-    total = await loop._cancel_active_tasks(ctx.key)  # pyright: ignore[reportPrivateUsage]
+    total = await loop.cancel_active_tasks(ctx.key)
     # Also drain pending queue to prevent mid-turn injection deadlock
     pending = loop._pending_queues.pop(ctx.key, None)  # pyright: ignore[reportPrivateUsage]
     if pending is not None:
@@ -301,7 +301,7 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
 async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     """Stop active task and start a fresh session."""
     loop = ctx.loop
-    await loop._cancel_active_tasks(ctx.key)  # pyright: ignore[reportPrivateUsage]
+    await loop.cancel_active_tasks(ctx.key)
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
     snapshot = session.messages[session.last_consolidated:]
     runtime = None

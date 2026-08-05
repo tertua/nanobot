@@ -114,6 +114,7 @@ def _basic_handler(bus: Any, **kw: Any) -> GatewayServices:
         runtime_model_name=None,
         runtime_surface=kw.get("runtime_surface", "browser"),
         runtime_capabilities_overrides=kw.get("runtime_capabilities_overrides"),
+        cancel_active_turn=kw.get("cancel_active_turn"),
     )
 
 
@@ -191,6 +192,146 @@ def isolate_webui_workspace_state(tmp_path, monkeypatch) -> None:
     wth._WEBSOCKET_TURN_WALL_STARTED_AT.clear()
     wth._WEBSOCKET_TURN_IDS.clear()
     wth._WEBSOCKET_TURN_OWNERS.clear()
+
+
+@pytest.mark.asyncio
+async def test_temporary_chat_is_connection_owned_and_never_persisted(bus, tmp_path) -> None:
+    sessions = SessionManager(tmp_path)
+    cancel = AsyncMock(return_value=0)
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"]},
+        bus,
+        gateway=_basic_handler(
+            bus,
+            session_manager=sessions,
+            workspace_path=tmp_path,
+            cancel_active_turn=cancel,
+        ),
+    )
+    connection = AsyncMock()
+    connection.remote_address = ("127.0.0.1", 5000)
+    channel._webui_connections.add(connection)
+    chat_id = "temporary-test"
+
+    await channel._dispatch_envelope(
+        connection,
+        "webui-client",
+        {
+            "type": "message",
+            "chat_id": chat_id,
+            "content": "read this",
+            "media": [{"data_url": "data:text/plain;base64,aGVsbG8=", "name": "note.txt"}],
+            "cli_apps": [{"name": "drawio"}],
+            "turn_id": "turn-1",
+            "webui": True,
+        },
+    )
+
+    inbound = bus.publish_inbound.await_args.args[0]
+    assert inbound.session_key == f"websocket:{chat_id}"
+    assert inbound.transient_session is True
+    assert inbound.metadata["cli_apps"] == [{"name": "drawio"}]
+    assert Path(inbound.media[0]).read_text(encoding="utf-8") == "hello"
+    assert sessions.get_cached(inbound.session_key).transient is True
+    assert read_transcript_lines(inbound.session_key) == []
+    assert [payload["event"] for payload in _sent_ws_payloads(connection)] == [
+        "message_accepted",
+    ]
+
+    await channel._dispatch_envelope(
+        connection,
+        "webui-client",
+        {"type": "discard_temporary_chat", "chat_id": chat_id},
+    )
+
+    cancel.assert_awaited_once_with(inbound.session_key)
+    assert sessions.is_transient_active(inbound.session_key) is False
+    assert Path(inbound.media[0]).exists() is False
+    assert read_transcript_lines(inbound.session_key) == []
+
+
+@pytest.mark.asyncio
+async def test_temporary_chat_rejects_unowned_messages(bus, tmp_path) -> None:
+    sessions = SessionManager(tmp_path)
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"]},
+        bus,
+        gateway=_basic_handler(
+            bus,
+            session_manager=sessions,
+            workspace_path=tmp_path,
+            cancel_active_turn=AsyncMock(return_value=0),
+        ),
+    )
+    owner = AsyncMock()
+    owner.remote_address = ("127.0.0.1", 5000)
+    intruder = AsyncMock()
+    intruder.remote_address = ("127.0.0.1", 5001)
+    channel._webui_connections.update({owner, intruder})
+
+    await channel._dispatch_envelope(
+        owner,
+        "webui-client",
+        {
+            "type": "message",
+            "chat_id": "temporary-owned",
+            "content": "hello",
+            "webui": True,
+        },
+    )
+
+    await channel._dispatch_envelope(
+        intruder,
+        "webui-client",
+        {
+            "type": "message",
+            "chat_id": "temporary-owned",
+            "content": "hello",
+            "webui": True,
+        },
+    )
+
+    assert bus.publish_inbound.await_count == 1
+    assert json.loads(intruder.send.await_args.args[0]) == {
+        "event": "error",
+        "detail": "temporary_chat_not_owned",
+        "chat_id": "temporary-owned",
+    }
+
+
+@pytest.mark.asyncio
+async def test_disconnect_discards_temporary_chat(bus, tmp_path) -> None:
+    sessions = SessionManager(tmp_path)
+    cancel = AsyncMock(return_value=0)
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"]},
+        bus,
+        gateway=_basic_handler(
+            bus,
+            session_manager=sessions,
+            workspace_path=tmp_path,
+            cancel_active_turn=cancel,
+        ),
+    )
+    connection = AsyncMock()
+    channel._webui_connections.add(connection)
+
+    await channel._dispatch_envelope(
+        connection,
+        "webui-client",
+        {
+            "type": "message",
+            "chat_id": "temporary-disconnect",
+            "content": "hello",
+            "webui": True,
+        },
+    )
+    await channel._cleanup_connection(connection)
+
+    session_key = "websocket:temporary-disconnect"
+    cancel.assert_awaited_once_with(session_key)
+    assert sessions.is_transient_active(session_key) is False
+    assert "temporary-disconnect" not in channel._subs
 
 
 @pytest.mark.asyncio

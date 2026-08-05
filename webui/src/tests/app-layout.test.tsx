@@ -13,6 +13,7 @@ const getSessionAutomationsSpy = vi.fn<(key: string) => Promise<SessionAutomatio
 const toggleThemeSpy = vi.fn();
 const updateUrlSpy = vi.fn();
 const attachSpy = vi.fn();
+const discardTemporaryChatSpy = vi.fn();
 const runStatusHandlers = new Set<(chatId: string, startedAt: number | null) => void>();
 const sessionUpdateHandlers = new Set<(chatId: string, scope?: string) => void>();
 let mockSessions: ChatSummary[] = [];
@@ -218,6 +219,7 @@ vi.mock("@/lib/nanobot-client", () => {
     sendMessage = vi.fn();
     newChat = vi.fn();
     attach = attachSpy;
+    discardTemporaryChat = discardTemporaryChatSpy;
     close = vi.fn();
     updateUrl = updateUrlSpy;
     updateMaxFrameBytes = vi.fn();
@@ -245,6 +247,7 @@ describe("App layout", () => {
     getSessionAutomationsSpy.mockReset().mockResolvedValue([]);
     toggleThemeSpy.mockReset();
     attachSpy.mockReset();
+    discardTemporaryChatSpy.mockReset();
     runStatusHandlers.clear();
     sessionUpdateHandlers.clear();
     window.history.replaceState(null, "", "/");
@@ -362,6 +365,27 @@ describe("App layout", () => {
       "data-active-id",
       "new-chat",
     );
+  });
+
+  it("opens and discards a highlighted temporary chat", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    const temporaryButton = within(sidebar).getByRole("button", { name: "Temporary chat" });
+
+    fireEvent.click(temporaryButton);
+
+    expect(temporaryButton).toHaveAttribute("aria-current", "page");
+    expect(within(sidebar).getByTestId("actions-selection-highlight")).toHaveAttribute(
+      "data-active-id",
+      "temporary-chat",
+    );
+    expect(window.location.hash).toBe("#/temporary");
+
+    fireEvent.click(within(sidebar).getByRole("button", { name: "New topic" }));
+    await waitFor(() => expect(discardTemporaryChatSpy).toHaveBeenCalledOnce());
+    expect(discardTemporaryChatSpy.mock.calls[0][0]).toMatch(/^temporary-/);
   });
 
   it("restores the Settings route after a restart fallback hash", async () => {

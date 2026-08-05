@@ -14,7 +14,7 @@ from nanobot.command.router import CommandContext
 async def test_cmd_stop_drains_pending_queue():
     """cmd_stop should drain pending queue in addition to cancelling active tasks."""
     mock_loop = MagicMock()
-    mock_loop._cancel_active_tasks = AsyncMock(return_value=1)
+    mock_loop.cancel_active_tasks = AsyncMock(return_value=1)
     mock_loop._pending_queues = {}
 
     pending = asyncio.Queue()
@@ -41,7 +41,7 @@ async def test_cmd_stop_drains_pending_queue():
 async def test_cmd_stop_with_empty_pending_queue():
     """cmd_stop should work correctly when pending queue is empty."""
     mock_loop = MagicMock()
-    mock_loop._cancel_active_tasks = AsyncMock(return_value=2)
+    mock_loop.cancel_active_tasks = AsyncMock(return_value=2)
     mock_loop._pending_queues = {}
 
     pending = asyncio.Queue()
@@ -65,7 +65,7 @@ async def test_cmd_stop_with_empty_pending_queue():
 async def test_cmd_stop_no_pending_queue():
     """cmd_stop should work when no pending queue exists."""
     mock_loop = MagicMock()
-    mock_loop._cancel_active_tasks = AsyncMock(return_value=0)
+    mock_loop.cancel_active_tasks = AsyncMock(return_value=0)
     mock_loop._pending_queues = {}
 
     ctx = CommandContext(
