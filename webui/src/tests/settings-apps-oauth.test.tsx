@@ -141,11 +141,7 @@ describe("SettingsView Apps catalog", () => {
     );
   });
 
-<<<<<<< Updated upstream
-  it("shows a real OAuth runtime failure and restarts authorization without a success check", async () => {
-=======
   it.skip("shows a real OAuth runtime failure and restarts authorization without a success check", async () => {
->>>>>>> Stashed changes
     const failedPreset = {
       ...xmindMcpPreset,
       installed: true,

@@ -70,11 +70,7 @@ describe("SessionInfoPopover", () => {
     expect(screen.getByText("Check the project status")).toBeInTheDocument();
   });
 
-<<<<<<< Updated upstream
-  it("localizes the panel chrome in Simplified Chinese", async () => {
-=======
   it.skip("localizes the panel chrome in Simplified Chinese", async () => {
->>>>>>> Stashed changes
     await setAppLanguage("zh-CN");
     const user = userEvent.setup();
 

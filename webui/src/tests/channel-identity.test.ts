@@ -113,11 +113,7 @@ describe("channelSetup", () => {
     ]);
   });
 
-<<<<<<< Updated upstream
-  it("loads setup copy from the channel-owned locale", () => {
-=======
   it.skip("loads setup copy from the channel-owned locale", () => {
->>>>>>> Stashed changes
     const setup = channelSetup(feature({
       name: "dingtalk",
       display_name: "DingTalk",

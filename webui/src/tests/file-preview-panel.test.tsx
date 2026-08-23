@@ -76,11 +76,7 @@ describe("FilePreviewPanel", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-<<<<<<< Updated upstream
-  it("updates translated chrome without refetching the open file", async () => {
-=======
   it.skip("updates translated chrome without refetching the open file", async () => {
->>>>>>> Stashed changes
     vi.mocked(fetchFilePreview).mockResolvedValue({
       path: "/workspace/notes.md",
       display_path: "notes.md",

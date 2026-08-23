@@ -1513,11 +1513,7 @@ describe("App layout", () => {
     expect(within(detailPanel).queryByText("No error recorded")).not.toBeInTheDocument();
   });
 
-<<<<<<< Updated upstream
-  it("localizes the Automations surface", async () => {
-=======
   it.skip("localizes the Automations surface", async () => {
->>>>>>> Stashed changes
     await i18n.changeLanguage("zh-CN");
     mockFetchRoutes({
       "/api/settings": baseSettingsPayload(),
@@ -1742,11 +1738,7 @@ describe("App layout", () => {
       .toBeInTheDocument();
   }, 15_000);
 
-<<<<<<< Updated upstream
-  it("shows localized bound automations in the first delete confirmation", async () => {
-=======
   it.skip("shows localized bound automations in the first delete confirmation", async () => {
->>>>>>> Stashed changes
     mockSessions = [
       {
         key: "websocket:chat-a",

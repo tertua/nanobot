@@ -18,11 +18,7 @@ describe("localized format helpers", () => {
     vi.useRealTimers();
   });
 
-<<<<<<< Updated upstream
-  it("formats relative time using the active locale", async () => {
-=======
   it.skip("formats relative time using the active locale", async () => {
->>>>>>> Stashed changes
     const value = "2026-04-18T11:59:00Z";
 
     await setAppLanguage("en");
@@ -46,11 +42,7 @@ describe("localized format helpers", () => {
     expect(english).not.toBe(chinese);
   });
 
-<<<<<<< Updated upstream
-  it("formats date-time using the active locale", async () => {
-=======
   it.skip("formats date-time using the active locale", async () => {
->>>>>>> Stashed changes
     const value = "2026-04-18T08:30:00Z";
     const date = new Date(value);
 
@@ -75,11 +67,7 @@ describe("localized format helpers", () => {
     expect(english).not.toBe(french);
   });
 
-<<<<<<< Updated upstream
-  it("shows only the local clock time for messages completed today", async () => {
-=======
   it.skip("shows only the local clock time for messages completed today", async () => {
->>>>>>> Stashed changes
     const value = Date.parse("2026-04-18T08:34:56Z");
     const date = new Date(value);
 
@@ -93,11 +81,7 @@ describe("localized format helpers", () => {
     );
   });
 
-<<<<<<< Updated upstream
-  it("adds the local date for messages completed before today", async () => {
-=======
   it.skip("adds the local date for messages completed before today", async () => {
->>>>>>> Stashed changes
     const value = Date.parse("2026-04-16T08:34:56Z");
     const date = new Date(value);
 
