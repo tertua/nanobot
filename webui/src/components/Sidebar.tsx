@@ -8,7 +8,6 @@ import {
   Archive,
   Brain,
   CalendarClock,
-  MessageCircleDashed,
   Menu,
   Search,
   Settings,
@@ -40,9 +39,7 @@ interface SidebarProps {
   activeKey: string | null;
   loading: boolean;
   newChatActive: boolean;
-  temporaryChatActive: boolean;
   onNewChat: () => void;
-  onOpenTemporaryChat: () => void;
   onSelect: (key: string) => void;
   onCloseTemporaryChat?: (key: string) => void;
   onRequestDelete: (key: string, label: string) => void;
@@ -116,10 +113,8 @@ export function Sidebar(props: SidebarProps) {
   const toggleLabel = t("thread.header.toggleSidebar");
   const newChatShortcut = newChatShortcutLabel();
   const activeActionRef = useRef<HTMLButtonElement>(null);
-  const activeActionId = props.temporaryChatActive
-    ? "temporary-chat"
-    : props.newChatActive
-      ? "new-chat"
+  const activeActionId = props.newChatActive
+    ? "new-chat"
     : props.activeUtility
       ? `utility:${props.activeUtility}`
       : null;
@@ -192,14 +187,6 @@ export function Sidebar(props: SidebarProps) {
           icon={<SquarePen className="h-4 w-4" />}
           shortcut={newChatShortcut}
           ariaKeyShortcuts="Meta+Shift+O Control+Shift+O"
-        />
-        <SidebarActionButton
-          collapsed={collapsed}
-          label={t("temporaryChat.title")}
-          onClick={props.onOpenTemporaryChat}
-          active={props.temporaryChatActive}
-          selectionRef={activeActionRef}
-          icon={<MessageCircleDashed className="h-4 w-4" />}
         />
         <SidebarActionButton
           collapsed={collapsed}

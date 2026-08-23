@@ -2,6 +2,14 @@ export const LOCALE_STORAGE_KEY = "nanobot.locale";
 
 export const supportedLocales = [
   { code: "en", label: "English", nativeLabel: "English" },
+  { code: "zh-CN", label: "Chinese (Simplified)", nativeLabel: "简体中文" },
+  { code: "zh-TW", label: "Chinese (Traditional)", nativeLabel: "繁體中文" },
+  { code: "fr", label: "French", nativeLabel: "Français" },
+  { code: "ja", label: "Japanese", nativeLabel: "日本語" },
+  { code: "ko", label: "Korean", nativeLabel: "한국어" },
+  { code: "es", label: "Spanish", nativeLabel: "Español" },
+  { code: "pt-BR", label: "Portuguese (Brazil)", nativeLabel: "Português (Brasil)" },
+  { code: "vi", label: "Vietnamese", nativeLabel: "Tiếng Việt" },
   { code: "id", label: "Indonesian", nativeLabel: "Bahasa Indonesia" },
 ] as const;
 
@@ -20,14 +28,30 @@ export function normalizeLocale(
   const exact = supportedLocales.find((locale) => locale.code === trimmed);
   if (exact) return exact.code;
 
-  const base = trimmed.toLowerCase().split("-")[0];
+  const lower = trimmed.toLowerCase();
+  if (lower === "zh" || lower.startsWith("zh-cn") || lower.startsWith("zh-sg")) {
+    return "zh-CN";
+  }
+  if (
+    lower.startsWith("zh-tw") ||
+    lower.startsWith("zh-hk") ||
+    lower.startsWith("zh-mo") ||
+    lower.startsWith("zh-hant")
+  ) {
+    return "zh-TW";
+  }
+  if (lower === "pt" || lower.startsWith("pt-")) {
+    return "pt-BR";
+  }
+
+  const base = lower.split("-")[0];
   const baseMatch = supportedLocales.find(
     (locale) => locale.code.toLowerCase() === base,
   );
   return baseMatch?.code ?? defaultLocale;
 }
 
-export function readStoredLocale(): SupportedLocale | null {
+function readStoredLocale(): SupportedLocale | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(LOCALE_STORAGE_KEY);

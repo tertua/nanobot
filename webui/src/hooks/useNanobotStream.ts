@@ -1122,10 +1122,7 @@ export function useNanobotStream(
           },
         ];
       });
-      if (!sideChannel) {
-        setIsStreaming(true);
-        setRunStartedAt(Math.floor(Date.now() / 1000));
-      }
+      if (!sideChannel) setIsStreaming(true);
       const wireMedia = hasAttachments ? images!.map((i) => i.media) : undefined;
       const clientOptions = {
         ...options,
@@ -1146,7 +1143,6 @@ export function useNanobotStream(
     if (!chatId) return;
     flushPendingStreamEvents();
     setIsStreaming(false);
-    setRunStartedAt(null);
     setMessages((prev) => {
       buffer.current = null;
       activeAssistantRef.current = null;

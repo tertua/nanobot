@@ -29,7 +29,7 @@ for (const [modulePath, loader] of Object.entries(modules)) {
   }
   const [, channel, locale] = match;
   if (!supportedLocaleCodes.has(locale)) {
-    continue;
+    throw new Error(`Channel '${channel}' has unsupported locale '${locale}'`);
   }
   const loaders = loadersByChannel.get(channel) ?? new Map();
   if (loaders.has(locale as SupportedLocale)) {
