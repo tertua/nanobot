@@ -8,11 +8,7 @@ from typing import Any, cast
 
 from loguru import logger
 
-from nanobot.bus.events import (
-    INBOUND_META_TRANSIENT_SESSION,
-    InboundMessage,
-    OutboundMessage,
-)
+from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.pairing import (
     PAIRING_CODE_META_KEY,
@@ -104,6 +100,31 @@ class BaseChannel(ABC):
         can apply any retry policy in one place.
         """
         pass
+
+    def progress_transport_defaults(self) -> tuple[bool, bool] | None:
+        """Return channel-owned defaults for progress and tool-hint messages.
+
+        ``None`` keeps the global channel policy. Channels should override this
+        only when their transport requires different defaults.
+        """
+        return None
+
+    def should_retry_send_error(self, error: Exception) -> bool:
+        """Return whether the channel manager may retry a failed delivery.
+
+        Channels with protocol-level business errors can override this hook to
+        prevent retries that cannot succeed until external state changes.
+        Transport and unexpected errors remain retryable by default.
+        """
+        return True
+
+    def start_error_message(self, error: Exception) -> str | None:
+        """Return an actionable public message for a channel startup failure.
+
+        Channel-specific exception handling stays in the owning channel. Returning
+        ``None`` keeps the manager's generic fallback.
+        """
+        return None
 
     async def send_delta(
         self,
@@ -241,6 +262,7 @@ class BaseChannel(ABC):
         session_key: str | None = None,
         is_dm: bool = False,
         authorization_id: str | None = None,
+        require_existing_session: bool = False,
     ) -> None:
         """Handle a message after checking its authorization subject.
 
@@ -281,8 +303,7 @@ class BaseChannel(ABC):
                 )
             return
 
-        meta = dict(metadata or {})
-        transient_session = meta.pop(INBOUND_META_TRANSIENT_SESSION, False) is True
+        meta = metadata or {}
         if self.supports_streaming:
             meta = {**meta, "_wants_stream": True}
 
@@ -294,7 +315,7 @@ class BaseChannel(ABC):
             media=media or [],
             metadata=meta,
             session_key_override=session_key,
-            transient_session=transient_session,
+            require_existing_session=require_existing_session,
         )
 
         await self.bus.publish_inbound(msg)

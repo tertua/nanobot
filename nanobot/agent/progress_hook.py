@@ -148,7 +148,7 @@ class AgentProgressHook(AgentHook):
             logger.info(
                 "Provider-hosted tool call: {}({})",
                 name,
-                json.dumps(arguments, ensure_ascii=False)[:200],
+                json.dumps(arguments, ensure_ascii=True)[:200],
             )
             return
         if on_progress_accepts_tool_events(self._on_progress):

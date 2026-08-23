@@ -470,15 +470,6 @@ def _extract_post_content(content_json: dict[str, Any]) -> tuple[str, list[str]]
     return "", []
 
 
-def _extract_post_text(content_json: dict[str, Any]) -> str:  # pyright: ignore[reportUnusedFunction]
-    """Extract plain text from Feishu post (rich text) message content.
-
-    Legacy wrapper for _extract_post_content, returns only text.
-    """
-    text, _ = _extract_post_content(content_json)
-    return text
-
-
 # =============================================================================
 # QR scan-to-create onboarding
 #
@@ -1670,7 +1661,7 @@ class FeishuChannel(BaseChannel):
                 "content": paragraphs,
             }
         }
-        return json.dumps(post_body, ensure_ascii=False)
+        return json.dumps(post_body, ensure_ascii=True)
 
     _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif"}
     _AUDIO_EXTS = {".opus"}
@@ -2143,7 +2134,7 @@ class FeishuChannel(BaseChannel):
                 .request_body(
                     CreateCardRequestBody.builder()
                     .type("card_json")
-                    .data(json.dumps(card_json, ensure_ascii=False))
+                    .data(json.dumps(card_json, ensure_ascii=True))
                     .build()
                 )
                 .build()
@@ -2157,7 +2148,7 @@ class FeishuChannel(BaseChannel):
             card_id = getattr(response.data, "card_id", None)
             if card_id:
                 card_content = json.dumps(
-                    {"type": "card", "data": {"card_id": card_id}}, ensure_ascii=False
+                    {"type": "card", "data": {"card_id": card_id}}, ensure_ascii=True
                 )
                 if reply_message_id:
                     sent = self._reply_message_sync(
@@ -2216,7 +2207,7 @@ class FeishuChannel(BaseChannel):
         """Set CardKit streaming_mode using a strictly increasing sequence."""
         from lark_oapi.api.cardkit.v1 import SettingsCardRequest, SettingsCardRequestBody
 
-        settings_payload = json.dumps({"config": {"streaming_mode": enabled}}, ensure_ascii=False)
+        settings_payload = json.dumps({"config": {"streaming_mode": enabled}}, ensure_ascii=True)
         try:
             request = (
                 SettingsCardRequest.builder()
@@ -2360,7 +2351,7 @@ class FeishuChannel(BaseChannel):
             ):
                 card = json.dumps(
                     {"config": {"wide_screen_mode": True}, "elements": chunk},
-                    ensure_ascii=False,
+                    ensure_ascii=True,
                 )
                 # Fallback replies stay in existing topics, but only create a
                 # new topic when reply-to-message is enabled.
@@ -2473,7 +2464,7 @@ class FeishuChannel(BaseChannel):
                     {"config": {"wide_screen_mode": True}, "elements": [
                         {"tag": "markdown", "content": self._format_tool_hint_delta(hint)},
                     ]},
-                    ensure_ascii=False,
+                    ensure_ascii=True,
                 )
                 _th_msg_id = self._thread_reply_target(msg.metadata)
                 if _th_msg_id:
@@ -2561,7 +2552,7 @@ class FeishuChannel(BaseChannel):
                             None,
                             _do_send,
                             "image",
-                            json.dumps({"image_key": key}, ensure_ascii=False),
+                            json.dumps({"image_key": key}, ensure_ascii=True),
                         )
                 else:
                     key = await loop.run_in_executor(None, self._upload_file_sync, file_path)
@@ -2579,7 +2570,7 @@ class FeishuChannel(BaseChannel):
                             None,
                             _do_send,
                             media_type,
-                            json.dumps({"file_key": key}, ensure_ascii=False),
+                            json.dumps({"file_key": key}, ensure_ascii=True),
                         )
 
             if msg.content and msg.content.strip():
@@ -2587,7 +2578,7 @@ class FeishuChannel(BaseChannel):
 
                 if fmt == "text":
                     # Short plain text – send as simple text message
-                    text_body = json.dumps({"text": msg.content.strip()}, ensure_ascii=False)
+                    text_body = json.dumps({"text": msg.content.strip()}, ensure_ascii=True)
                     await loop.run_in_executor(None, _do_send, "text", text_body)
 
                 elif fmt == "post":
@@ -2604,7 +2595,7 @@ class FeishuChannel(BaseChannel):
                             None,
                             _do_send,
                             "interactive",
-                            json.dumps(card, ensure_ascii=False),
+                            json.dumps(card, ensure_ascii=True),
                         )
 
         except Exception:

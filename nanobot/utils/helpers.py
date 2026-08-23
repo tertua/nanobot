@@ -351,18 +351,6 @@ def timestamp() -> str:
     return datetime.now().isoformat()
 
 
-def current_time_str(timezone: str | None = None) -> str:
-    """Return the current time string."""
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo(timezone) if timezone else None
-    now = datetime.now(tz=tz) if tz else datetime.now().astimezone()
-    offset = now.strftime("%z")
-    offset_fmt = f"{offset[:3]}:{offset[3:]}" if len(offset) == 5 else offset
-    tz_name = timezone or (time.strftime("%Z") or "UTC")
-    return f"{now.strftime('%Y-%m-%d %H:%M (%A)')} ({tz_name}, UTC{offset_fmt})"
-
-
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
 _TOOL_RESULT_PREVIEW_CHARS = 1200
 _TOOL_RESULTS_DIR = ".nanobot/tool-results"
@@ -609,7 +597,7 @@ def maybe_persist_tool_result(
     path = bucket / f"{safe_filename(tool_call_id)}.{suffix}"
     if not path.exists():
         if suffix == "json" and isinstance(content, list):
-            _write_text_atomic(path, json.dumps(content, ensure_ascii=False, indent=2))
+            _write_text_atomic(path, json.dumps(content, ensure_ascii=True, indent=2))
         else:
             _write_text_atomic(path, text_payload)
 
@@ -702,7 +690,7 @@ def _estimate_prompt_tokens_with_source(
 
         tc = msg.get("tool_calls")
         if tc:
-            parts.append(json.dumps(tc, ensure_ascii=False))
+            parts.append(json.dumps(tc, ensure_ascii=True))
 
         rc = msg.get("reasoning_content")
         if isinstance(rc, str) and rc:
@@ -724,7 +712,7 @@ def _estimate_prompt_tokens_with_source(
         return message_tokens + tool_tokens + per_message_overhead, "tiktoken"
     except Exception:
         tool_payload = (
-            ("\n" if message_payload else "") + json.dumps(tools, ensure_ascii=False)
+            ("\n" if message_payload else "") + json.dumps(tools, ensure_ascii=True)
             if tools
             else ""
         )
@@ -756,16 +744,16 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
                 if isinstance(text, str) and text:
                     parts.append(text)
             else:
-                parts.append(json.dumps(raw_part, ensure_ascii=False))
+                parts.append(json.dumps(raw_part, ensure_ascii=True))
     elif content is not None:
-        parts.append(json.dumps(content, ensure_ascii=False))
+        parts.append(json.dumps(content, ensure_ascii=True))
 
     for key in ("name", "tool_call_id"):
         value = message.get(key)
         if isinstance(value, str) and value:
             parts.append(value)
     if message.get("tool_calls"):
-        parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
+        parts.append(json.dumps(message["tool_calls"], ensure_ascii=True))
 
     rc = message.get("reasoning_content")
     if isinstance(rc, str) and rc:

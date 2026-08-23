@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypedDict
@@ -156,6 +157,10 @@ class SubagentManager:
         self._running_tasks: dict[str, asyncio.Task[str]] = {}
         self._task_statuses: dict[str, SubagentStatus] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+
+    def runtime_statuses(self) -> Mapping[str, SubagentStatus]:
+        """Return the observable task statuses used by runtime-control snapshots."""
+        return self._task_statuses
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Update the deprecated runtime source used by legacy ``spawn`` calls."""
@@ -535,12 +540,17 @@ class SubagentManager:
         skills_summary = SkillsLoader(
             self.workspace,
             disabled_skills=self.disabled_skills,
-        ).build_skills_summary()
+        ).build_skills_summary(workspace=project_workspace)
+        history_log = (
+            str(agent_workspace / "memory" / "history.jsonl")
+            if agent_workspace != project_workspace
+            else "memory/history.jsonl"
+        )
         return render_template(
             "agent/subagent_system.md",
             workspace=str(project_workspace),
             agent_workspace=str(agent_workspace),
-            history_log=str(agent_workspace / "memory" / "history.jsonl"),
+            history_log=history_log,
             skills_summary=skills_summary or "",
         )
 

@@ -39,6 +39,16 @@ export interface UIMediaAttachment {
 
 export interface UIMessageSource { kind: "cron" | "local_trigger" | "trigger" | string; label?: string; }
 
+export interface TurnUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cached_tokens?: number;
+  context_tokens?: number;
+  request_count?: number;
+  estimated_tokens?: number;
+  [key: string]: number | undefined;
+}
+
 export interface UIMessage {
   id: string;
   role: Role;
@@ -56,6 +66,9 @@ export interface UIMessage {
   fileEdits?: UIFileEdit[];
   /** Activity rows created during the same agent phase share one collapsible block. */
   activitySegmentId?: string;
+  /** Internal projection marker for assistant text emitted before a later tool.
+   * It is not a wire message and is rendered as a compact activity row. */
+  activityKind?: "model";
   /** User turn: optimistic blob URLs for preview. Replay: placeholder chips. */
   images?: UIImage[];
   /** Signed or local UI-renderable media attachments. */
@@ -77,8 +90,14 @@ export interface UIMessage {
   latencyMs?: number;
   /** Client epoch milliseconds when the definitive ``turn_end`` was received. */
   completedAt?: number;
+  /** Additive model usage for this turn; context_tokens is the final request only. */
+  usage?: TurnUsage;
+  /** Configured context-window capacity for the model used by this turn. */
+  contextWindowTokens?: number;
   /** Lightweight provenance for proactive assistant messages. */
   source?: UIMessageSource;
+  /** Structured provenance for a message delivered by another session. */
+  sessionMessage?: UISessionMessage;
   /** Stable protocol metadata for grouping all activity emitted by one user turn. */
   turnId?: string;
   turnPhase?: UITurnPhase;
@@ -110,11 +129,24 @@ export interface UIMcpPresetAttachment {
 }
 
 export interface SessionMention {
+  /** Stable public identity. Older transcript rows may not include it. */
+  id?: string;
   /** Text token inserted in the composer, without the leading @. */
   name: string;
   /** Stable persisted-session identifier used by read_session. */
   session_key: string;
   title: string;
+}
+
+/** Stable public handle returned by the session-list endpoint. */
+export interface SessionHandle {
+  id: string;
+  name: string;
+}
+
+export interface UISessionMessage {
+  message_id: string;
+  session: SessionHandle;
 }
 
 export interface SessionAutomationJob {
@@ -279,8 +311,10 @@ export interface AgentUIBlob {
 /** WebSocket snapshot for sustained goals (`goal_state` events; keyed by ``chat_id``). */
 export interface GoalStateWsPayload {
   active: boolean;
+  status?: "active" | "blocked";
   ui_summary?: string;
   objective?: string;
+  recap?: string;
 }
 
 export interface ToolProgressEvent {
@@ -335,6 +369,8 @@ export interface ChatSummary {
   /** Unix epoch seconds when this session currently has a turn in flight. */
   runStartedAt?: number | null;
   workspaceScope?: WorkspaceScopePayload | null;
+  /** Stable, server-owned @handle for this session. */
+  handle?: SessionHandle | null;
 }
 
 export type WorkspaceAccessMode = "restricted" | "full";
@@ -363,11 +399,27 @@ export interface WorkspacesPayload {
   controls: {
     can_change_project: boolean;
     can_use_full_access: boolean;
+    can_pick_folder?: boolean;
   };
 }
 
 export type SidebarDensity = "comfortable" | "compact";
-export type SidebarSortMode = "updated_desc" | "created_desc" | "title_asc";
+export type SidebarSortMode = "updated_desc" | "created_desc" | "title_asc" | "manual";
+export type WorkbenchLayout = "columns" | "rows" | "grid" | "bsp" | "main-stack";
+
+export interface WorkbenchTabState {
+  explicit: boolean;
+  title: string | null;
+  paneKeys: string[];
+  layoutPaneKeys: string[];
+  layout: WorkbenchLayout;
+  splitRatios: number[];
+}
+
+export interface WorkbenchState {
+  version: 1;
+  tabs: Record<string, WorkbenchTabState>;
+}
 
 export interface SidebarViewState {
   density: SidebarDensity;
@@ -381,10 +433,12 @@ export interface SidebarStatePayload {
   schema_version: number;
   pinned_keys: string[];
   archived_keys: string[];
+  session_order: string[];
   title_overrides: Record<string, string>;
   project_name_overrides: Record<string, string>;
   tags_by_key: Record<string, string[]>;
   collapsed_groups: Record<string, boolean>;
+  workbench: WorkbenchState;
   view: SidebarViewState;
   updated_at?: string | null;
 }
@@ -504,7 +558,8 @@ export interface SettingsPayload {
   };
   model_presets: Array<{
     name: string;
-    label: string;
+    /** @deprecated Compatibility alias. New clients must use `name`. */
+    label?: string;
     active: boolean;
     is_default: boolean;
     model: string;
@@ -955,13 +1010,16 @@ export interface McpPresetInfo {
   description: string;
   docs_url: string;
   transport: "stdio" | "streamableHttp" | "sse" | "oauth" | string;
+  auth?: "oauth" | null;
   requires: string;
   note: string;
   install_supported: boolean;
   installed: boolean;
   configured: boolean;
+  enabled?: boolean;
   available: boolean;
   status: "not_installed" | "configured" | "missing_credentials" | "missing_dependency" | "coming_soon" | string;
+  runtime_status?: "connecting" | "connected" | "failed" | string;
   logo_url?: string | null;
   brand_color?: string | null;
   required_fields: McpPresetField[];
@@ -973,6 +1031,30 @@ export interface McpPresetInfo {
   enabled_tools?: string[];
   source?: "preset" | "custom" | string;
   manifest?: AppManifest;
+}
+
+export type McpOAuthFlowStatus =
+  | "starting"
+  | "authorization_required"
+  | "connecting"
+  | "authorized"
+  | "connected"
+  | "failed"
+  | "cancelled";
+
+export interface McpOAuthFlowPayload {
+  flow_id: string;
+  name: string;
+  status: McpOAuthFlowStatus;
+  expires_in: number;
+  authorization_url?: string;
+  completion_input?: "callback_url";
+  error?: string;
+  hot_reload?: {
+    ok: boolean;
+    message?: string;
+    requires_restart?: boolean;
+  };
 }
 
 export interface McpPresetsPayload {
@@ -1040,8 +1122,7 @@ export interface SettingsUpdate {
 }
 
 export interface ModelConfigurationCreate {
-  name?: string;
-  label: string;
+  name: string;
   provider: string;
   model: string;
   maxTokens?: number;
@@ -1052,7 +1133,7 @@ export interface ModelConfigurationCreate {
 
 export interface ModelConfigurationUpdate {
   name: string;
-  label?: string;
+  newName?: string;
   provider?: string;
   model?: string;
   maxTokens?: number;
@@ -1161,8 +1242,35 @@ export interface InboundTurnMetadata {
 
 export type InboundEvent =
   | { event: "ready"; chat_id: string; client_id: string }
-  | { event: "attached"; chat_id: string }
-  | { event: "message_accepted"; chat_id: string; turn_id: string }
+  | {
+      event: "attached";
+      chat_id: string;
+      temporary?: boolean;
+      usage?: TurnUsage;
+    }
+  | {
+      event: "message_accepted";
+      chat_id: string;
+      turn_id: string;
+      starts_turn?: boolean;
+      active_turn_id?: string;
+      started_at?: number;
+    }
+  | {
+      event: "user_message";
+      chat_id: string;
+      text: string;
+      turn_id?: string;
+      active_turn_id?: string;
+      starts_turn: boolean;
+      started_at?: number;
+      created_at_ms?: number;
+      media_urls?: UIMediaAttachment[];
+      cli_apps?: UICliAppAttachment[];
+      mcp_presets?: UIMcpPresetAttachment[];
+      session_mentions?: SessionMention[];
+      provenance?: { session_message?: UISessionMessage };
+    }
   | ({
       event: "message";
       chat_id: string;
@@ -1226,11 +1334,15 @@ export type InboundEvent =
       event: "turn_model_updated";
       chat_id: string;
       model_name: string;
+      model_preset?: string | null;
+      fallback?: boolean;
     }
   | ({
       event: "turn_end";
       chat_id: string;
       latency_ms?: number;
+      usage?: TurnUsage;
+      context_window_tokens?: number;
       /** Authoritative sustained-goal snapshot for this chat (same shape as ``goal_state`` events). */
       goal_state?: GoalStateWsPayload;
     } & InboundTurnMetadata)
@@ -1253,12 +1365,28 @@ export type InboundEvent =
       scope?: "metadata" | "thread" | string;
       workspace_scope?: WorkspaceScopePayload;
     }
+  | {
+      event: "sidebar_state_updated";
+      state: SidebarStatePayload;
+    }
   | { event: "transcription_result"; request_id: string; text: string }
   | {
       event: "transcription_error";
       request_id?: string;
       detail?: string;
       provider?: string;
+    }
+  | {
+      event: "webui_response";
+      request_id: string;
+      ok: true;
+      result: unknown;
+    }
+  | {
+      event: "webui_response";
+      request_id: string;
+      ok: false;
+      error: { status: number; message: string };
     }
   | {
       event: "error";
@@ -1337,8 +1465,16 @@ export interface FilePreviewPayload {
 
 export type Outbound =
   | { type: "new_chat"; workspace_scope?: WorkspaceScopePayload }
+  | { type: "new_temporary_chat" }
+  | {
+      type: "webui_request";
+      request_id: string;
+      action: string;
+      payload: Record<string, unknown>;
+    }
   | { type: "fork_chat"; source_chat_id: string; before_user_index: number; title?: string }
   | { type: "attach"; chat_id: string }
+  | { type: "set_sidebar_state"; state: SidebarStatePayload }
   | { type: "discard_temporary_chat"; chat_id: string }
   | { type: "set_workspace_scope"; chat_id: string; workspace_scope: WorkspaceScopePayload }
   | { type: "transcribe_audio"; request_id: string; data_url: string; duration_ms?: number }

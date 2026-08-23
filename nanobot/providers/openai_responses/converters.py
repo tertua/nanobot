@@ -175,7 +175,7 @@ def convert_tool_output(content: Any) -> str | list[dict[str, Any]]:
         else:
             if converted:
                 return converted
-    return json.dumps(content, ensure_ascii=False)
+    return json.dumps(content, ensure_ascii=True)
 
 
 def convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
