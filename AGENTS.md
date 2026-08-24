@@ -4,14 +4,19 @@
 
 Nanobot is a portable AI agent framework (Python) that connects to chat platforms via an async message bus. Fork of HKUDS/nanobot with Windows portable simplifications.
 
+Related repo: [tertua/nanowin](https://github.com/tertua/nanowin) — separate Windows portable *installer* repo (unrelated git history). It clones/downloads this repo's `master` at install time, then patches source files via `scripts/portable_paths.py`. See "nanowin patch anchors" below before editing the files it touches.
+
 ## Monorepo layout
 
 ```
 nanobot/          Python core package (pyproject.toml, hatchling build)
 webui/            React 18 + TypeScript + Vite frontend (bun/npm)
-bridge/           WhatsApp bridge (Baileys, Node.js >=20)
-docs/             Internal architecture docs
+tui/              Terminal UI assets
+images/           README/webui images
+scripts/          Repo maintenance scripts
 ```
+
+`docs/`, `tests/`, and `bridge/` are removed in this fork (upstream `main` branch keeps them).
 
 ## Key commands
 
@@ -31,10 +36,7 @@ ruff check .                # Python linter (E/F/I/N/W, E501 ignored)
 ruff format .               # auto-format
 ```
 
-Test:
-```bash
-pytest                      # runs tests/ (currently empty in this fork)
-```
+Test: no Python tests in this fork (removed). WebUI tests exist (`cd webui && bunx vitest run`).
 
 - **Agent Loop** (`nanobot/agent/loop.py`, `runner.py`): The core processing engine. `AgentLoop` manages session keys, hooks, and context building. `AgentRunner` executes the multi-turn LLM conversation with tool execution.
 - **LLM Providers** (`nanobot/providers/`): Provider implementations (Anthropic, OpenAI-compatible, OpenAI Responses API, Azure, Bedrock, GitHub Copilot, OpenAI Codex, etc.) built on a common base (`base.py`). Includes image generation (`image_generation.py`) and audio transcription (`transcription.py`). `factory.py` and `registry.py` handle instantiation and model discovery.
@@ -55,20 +57,11 @@ pytest                      # runs tests/ (currently empty in this fork)
 
 ```bash
 cd webui
-bun install                 # npm install also works
+bun install                 # npm install also works; lock files are not committed
 bun run dev                 # Vite HMR on :5173, proxies API to :8765
 bun run build               # writes to ../nanobot/web/dist
-bun run test                # vitest
+bun run test                # bunx vitest run
 bun run lint                # eslint (max-warnings 0)
-```
-
-### Bridge (WhatsApp)
-
-```bash
-cd bridge
-npm install
-npm run build               # tsc
-npm start                   # node dist/index.js
 ```
 
 ## Build system
@@ -95,26 +88,56 @@ Key entrypoints:
 
 Default: `~/.nanobot/config.json`. Override with `--config`. Env vars: `NANOBOT_*` with `__` as nested delimiter.
 
-This fork applies whitelists on generated config:
+This fork applies whitelists on generated config (`get_provider_whitelist()` / `_CHANNEL_WHITELIST` in `loader.py`, applied in `save_config()` and `_onboard_plugins()`):
 - **Providers**: openai, custom, aihubmix, openrouter, nvidia (others omitted from config.json)
 - **Channels**: telegram, whatsapp, websocket, email, cli (others omitted)
 
-See `docs/CONFIG_GUIDE.md` for full config reference.
+The WebUI settings view filters providers through the same whitelist (`nanobot/webui/settings_models.py`).
+
+## Upstream sync playbook
+
+`.gitattributes` protects with `merge=ours`: `docs/`, `tests/`, `webui/src/i18n/locales`, `README.md`.
+
+When merging `upstream/main`:
+1. For conflicted files, prefer taking the **upstream version wholesale**, then re-apply fork bits on top — keeping the old fork side risks losing upstream refactors (this caused a real crash once: schema.py lost `idle_compact_check_interval_seconds` while loop.py referenced it).
+2. Re-apply fork bits after taking upstream files (see "Fork-specific notes").
+3. Verify after merge: `ruff check nanobot/`, import smoke test of all touched modules, `uv run nanobot --help`, `cd webui && bun run build && bunx vitest run`.
+4. Check nanowin patch anchors still match (below) and that any new startup dependency is added to nanowin's `scripts/requirements-lite.txt`.
+
+## nanowin patch anchors
+
+`tertua/nanowin` `scripts/portable_paths.py` string-matches and rewrites these files post-install. Changing these anchor regions breaks silent installs (fails as `[WARN] pattern not found`):
+- `config/paths.py` — `Path.home() / ".nanobot" / ...` fallbacks
+- `config/loader.py` — `get_config_path()` body
+- `config/schema.py` — `workspace: str = "~/.nanobot/workspace"` default
+- `cli/commands.py` — `_set_nanobot_logs(verbose)` block in serve()
+- `cli/agent.py` — `_set_nanobot_logs(logs)`
+- `cli/gateway.py` — `configure_logging()` body
+- `utils/helpers.py` — `sync_workspace_templates()` pkg_files block
+- `agent/memory.py` — `__init__` memory paths + `GitStore(workspace, ...)`
+
+Also keep nanowin's `scripts/requirements-lite.txt` in sync with anything imported on the startup path (e.g. `tzlocal`, `packaging`, `httpx[socks]` were missed once).
 
 ## Important constraints
 
 - Python requires >=3.11 (uses `|` union syntax, `tomllib`)
 - `SOUL.md`, `USER.md`, `MEMORY.md` in workspace are managed by the Dream consolidation system — do not edit manually
 - All Python tests were removed in this fork — no test safety net for core changes
-- WebUI tests exist in `webui/src/tests/` (vitest + testing-library)
+- WebUI tests exist in `webui/src/tests/` (vitest + testing-library); several are `it.skip`ped because they expect locales this fork removed
 - Session files are JSONL in `{workspace}/sessions/`
 - Tools are auto-discovered via pkgutil scanning; new tools go in `nanobot/agent/tools/`
 - MCP servers configured in `tools.mcpServers` in config.json
 - Line length: 100 (ruff), Python target: 3.11
+- No CI workflows (.github/workflows removed); no lock files committed (webui/bun.lock gitignored)
 
 ## Fork-specific notes
 
-- i18n limited to English + Indonesian (other locales removed)
-- Settings view split into components (was 5500+ lines)
-- Windows portable path handling in config loader
-- No CI workflows (.github/workflows removed)
+- README.md is intentionally short (fork header only); full upstream docs live on the `main` branch which tracks HKUDS/nanobot
+- i18n limited to English + Indonesian (`webui/src/i18n/config.ts`); locale files kept: en, id, pt-BR; other locales deleted
+- Branding: `bot_name="nanowin"`, `bot_icon="✨"` (schema.py), `__logo__="✨"` (__init__.py), OpenRouter headers in `image_generation.py` point to tertua/nanowin
+- `ensure_ascii=True` policy: all `json.dumps` calls that produce user-visible/error output use `ensure_ascii=True` to avoid crashes on unpaired surrogates (Windows consoles); ~20 files, must be re-applied after taking upstream versions
+- Surrogate sanitization helpers (`.encode("utf-8", errors="replace").decode()`) in providers/base error paths — same reason
+- AihubMix `default_extra_headers={"APP-Code": ...}` in `registry.py`; `factory.py` guards against missing `default_extra_headers`
+- NVIDIA API key URL default (build.nvidia.com) in onboard output (`commands.py`)
+- Fork keeps the `webui_cancel_active_turn` chain (gateway_runtime → channels/manager → gateway_services); upstream removed it
+- Windows portable path handling in config loader (NANOBOT_HOME support)
