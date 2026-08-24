@@ -94,7 +94,9 @@ This fork applies whitelists on generated config (`get_provider_whitelist()` / `
 
 The WebUI settings view filters providers through the same whitelist (`nanobot/webui/settings_models.py`).
 
-Dynamic custom providers also work for image generation: `tools.imageGeneration.provider` may name any extra key under `providers`; it is served by the generic OpenAI-compatible `CustomImageGenerationProvider` (requires `apiBase`) and appears in the WebUI image-generation provider list.
+Dynamic custom providers also work for image generation: `tools.imageGeneration.provider` may name any extra key under `providers`; it is served by the generic OpenAI-compatible `CustomImageGenerationProvider` (requires `apiBase`) and appears in the WebUI image-generation provider list. A fallback warning is logged when the name is not a registered provider.
+
+Image-gen request defaults can be opted out per-request via `"extraBody": {"response_format": null}` — null-valued extraBody keys drop the client default (`_merge_extra_body`, consistent across all clients). API keys support `${ENV_VAR}` references in config.json (resolved via `resolve_config_env_vars`) — prefer env vars over plaintext keys on portable installs.
 
 ## Upstream sync playbook
 

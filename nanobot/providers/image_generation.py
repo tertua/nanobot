@@ -234,6 +234,28 @@ async def _download_image_data_url(
     return f"data:{mime};base64,{encoded}"
 
 
+def _merge_extra_body(body: dict[str, Any], extra_body: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge ``extraBody`` into *body*; null values drop the default key (opt-out).
+
+    Consistent across all clients: defaults such as ``response_format`` can be
+    disabled per-request via ``"extraBody": {"response_format": null}``.
+    """
+    if extra_body:
+        body.update(extra_body)
+    return {key: value for key, value in body.items() if value is not None}
+
+
+def _safe_detail(text: str, limit: int = 500) -> str:
+    """Sanitize response text for error messages (strip unpaired surrogates).
+
+    Third-party response bodies may contain characters that are invalid as
+    UTF-8 pairs; without sanitization these can crash Windows consoles
+    (see the fork-wide ensure_ascii policy).
+    """
+    cleaned = text[:limit].encode("utf-8", errors="replace").decode("utf-8")
+    return cleaned or "<empty response body>"
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -269,7 +291,7 @@ def image_gen_provider_configs(config: Config) -> dict[str, ProviderConfig]:
         for name in _IMAGE_GEN_PROVIDERS
         if (pc := getattr(providers_cfg, name, None)) is not None
     }
-    # Custom provider dinamis (key tambahan apa pun di bawah "providers")
+    # Dynamic custom providers (any extra key under "providers")
     for name, pc in (providers_cfg.model_extra or {}).items():
         if isinstance(pc, ProviderConfig):
             configs.setdefault(name, pc)
@@ -411,7 +433,7 @@ class OpenRouterImageGenerationClient(ImageGenerationProvider):
             image_config["image_size"] = image_size
         if image_config:
             body["image_config"] = image_config
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -425,7 +447,7 @@ class OpenRouterImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
+            detail = _safe_detail(response.text)
             raise ImageGenerationError(f"OpenRouter image generation failed: {detail}") from exc
 
         data = _as_json_object(response.json()) or {}
@@ -519,7 +541,7 @@ class AIHubMixImageGenerationClient(ImageGenerationProvider):
         }
         if image_input is not None:
             input_body["image"] = image_input
-        input_body.update(self.extra_body)
+        input_body = _merge_extra_body(input_body, self.extra_body)
 
         body = {"input": input_body}
         model_path = _aihubmix_model_path(model)
@@ -539,7 +561,7 @@ class AIHubMixImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
+            detail = _safe_detail(response.text)
             raise ImageGenerationError(f"AIHubMix image generation failed: {detail}") from exc
 
         payload = _as_json_object(response.json()) or {}
@@ -563,7 +585,7 @@ def _http_error_detail(response: httpx.Response) -> str:
                 return str(err)
     except Exception:
         pass
-    return response.text[:500] or "<empty response body>"
+    return _safe_detail(response.text)
 
 
 def _round_to_multiple(value: float, multiple: int = 8) -> int:
@@ -663,7 +685,7 @@ class OllamaImageGenerationClient(ImageGenerationProvider):
             "height": height,
             "steps": 0,
         }
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
         body["stream"] = False
 
         headers = {
@@ -765,7 +787,7 @@ class GeminiImageGenerationClient(ImageGenerationProvider):
             "instances": [{"prompt": prompt}],
             "parameters": parameters,
         }
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         url = f"{self.api_base}/models/{model}:predict"
         headers = {
@@ -824,7 +846,7 @@ class GeminiImageGenerationClient(ImageGenerationProvider):
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": generation_config,
         }
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         url = f"{self.api_base}/models/{model}:generateContent"
         headers = {
@@ -1048,7 +1070,7 @@ class MiniMaxImageGenerationClient(ImageGenerationProvider):
                 {"type": "character", "image_file": ref} for ref in image_refs
             ]
 
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         return await self._generate_with_client(body, headers)
 
@@ -1068,7 +1090,7 @@ class MiniMaxImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
+            detail = _safe_detail(response.text)
             raise ImageGenerationError(f"MiniMax image generation failed: {detail}") from exc
 
         payload = response.json()
@@ -1228,9 +1250,7 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
         if size:
             body["size"] = size
 
-        body.update(self.extra_body)
-        # Drop null-valued params so extraBody can opt out of defaults like response_format.
-        body = {key: value for key, value in body.items() if value is not None}
+        body = _merge_extra_body(body, self.extra_body)
 
         refs = list(reference_images or [])
         if refs:
@@ -1267,7 +1287,7 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:1000]
+            detail = _safe_detail(response.text, 1000)
             logger.error("OpenAI Images API error ({}): {}", response.status_code, detail)
             raise ImageGenerationError(
                 f"OpenAI image generation failed (HTTP {response.status_code}): {detail}"
@@ -1338,7 +1358,7 @@ class CustomImageGenerationClient(ImageGenerationProvider):
             "n": 1,
             "size": self._custom_size(aspect_ratio, image_size),
         }
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         logger.info("Custom Images API request: POST {}/images/generations body={}", self.api_base, body)
 
@@ -1351,7 +1371,7 @@ class CustomImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:1000]
+            detail = _safe_detail(response.text, 1000)
             logger.error("Custom Images API error ({}): {}", response.status_code, detail)
             raise ImageGenerationError(
                 f"Custom image generation failed (HTTP {response.status_code}): {detail}"
@@ -1453,7 +1473,7 @@ class CodexImageGenerationClient(ImageGenerationProvider):
             "stream": True,
             "store": False,
         }
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         logger.info("Codex Responses API request: POST {}/codex/responses body={}",
                        self.api_base, {k: v for k, v in body.items() if k != "input"})
@@ -1467,7 +1487,7 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:1000]
+            detail = _safe_detail(response.text, 1000)
             logger.error("Codex Responses API error ({}): {}", response.status_code, detail)
             raise ImageGenerationError(
                 f"Codex image generation failed (HTTP {response.status_code}): {detail}"
@@ -1732,7 +1752,7 @@ class StepFunImageGenerationClient(ImageGenerationProvider):
                 "source_url": image_path_to_data_url(refs[0]),
             }
 
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         response = await self._http_post(
             f"{self.api_base}/images/generations",
@@ -1743,7 +1763,7 @@ class StepFunImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
+            detail = _safe_detail(response.text)
             raise ImageGenerationError(
                 f"StepFun image generation failed: {detail}"
             ) from exc
@@ -1850,7 +1870,7 @@ class ZhipuImageGenerationClient(ImageGenerationProvider):
         if size:
             body["size"] = size
 
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         url = f"{self.api_base}/images/generations"
 
@@ -1884,7 +1904,7 @@ class ZhipuImageGenerationClient(ImageGenerationProvider):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = response.text[:500]
+            detail = _safe_detail(response.text)
             raise ImageGenerationError(f"Zhipu image generation failed: {detail}") from exc
 
         payload = response.json()
@@ -2008,7 +2028,7 @@ class ModelScopeImageGenerationClient(ImageGenerationProvider):
             image_refs = [image_path_to_data_url(path) for path in refs]
             body["image_url"] = image_refs[0] if len(image_refs) == 1 else image_refs
 
-        body.update(self.extra_body)
+        body = _merge_extra_body(body, self.extra_body)
 
         url = f"{self.api_base}/images/generations"
         client = self._client or httpx.AsyncClient(**self._http_client_kwargs())
@@ -2048,7 +2068,7 @@ class ModelScopeImageGenerationClient(ImageGenerationProvider):
         task_id = task_data.get("task_id")
         if not task_id:
             raise ImageGenerationError(
-                f"ModelScope did not return a task_id: {response.text[:500]}"
+                f"ModelScope did not return a task_id: {_safe_detail(response.text)}"
             )
 
         images = await self._poll_task(client, task_id, headers)

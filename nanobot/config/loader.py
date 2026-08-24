@@ -206,8 +206,8 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         if settings:
             data.setdefault("providers", {})[alias] = settings
 
-    # Filter providers: whitelist + custom provider dinamis (key di luar
-    # daftar built-in ProvidersConfig dipertahankan apa pun namanya)
+    # Filter providers: keep whitelisted keys plus dynamic custom providers
+    # (any key outside the built-in ProvidersConfig fields is preserved)
     if "providers" in data:
         from nanobot.config.schema import ProvidersConfig
 
@@ -220,8 +220,8 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
             if k in _PROVIDER_WHITELIST or k not in _builtin_provider_keys
         }
 
-    # Filter channels: hanya yang ada di whitelist yang ikut tercetak
-    # (built-in fields seperti send_progress tetap dipertahankan)
+    # Filter channels: keep whitelisted channels only
+    # (built-in fields such as send_progress are always preserved)
     if "channels" in data:
         _known_channel_fields = {
             "sendProgress",

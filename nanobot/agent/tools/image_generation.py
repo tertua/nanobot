@@ -136,14 +136,21 @@ class ImageGenerationTool(Tool):
         cls = get_image_gen_provider(self.config.provider)
         dynamic_name = None
         if cls is None:
-            # Custom provider dinamis (key di luar registry): pakai client
-            # OpenAI-compatible generik dengan apiBase dari config provider.
+            # Dynamic custom provider (key outside the registry): use the
+            # generic OpenAI-compatible client with the provider's apiBase.
             if provider is None:
                 return None
             cls = get_image_gen_provider("custom")
             if cls is None:
                 return None
             dynamic_name = self.config.provider
+            logger.warning(
+                "Image generation provider '{}' is not registered; falling back to the "
+                "generic OpenAI-compatible client (apiBase from providers.{}). "
+                "Check the provider name spelling if this is unintended.",
+                dynamic_name,
+                dynamic_name,
+            )
         kwargs: dict[str, Any] = {
             "api_key": provider.api_key if provider and isinstance(provider.api_key, str) else None,
             "api_base": provider.api_base if provider and isinstance(provider.api_base, str) else None,
@@ -198,7 +205,12 @@ class ImageGenerationTool(Tool):
     ) -> str:
         client = self._provider_client()
         if client is None:
-            return ToolResult.error(f"Error: unsupported image generation provider '{self.config.provider}'")
+            return ToolResult.error(
+                f"Error: image generation provider '{self.config.provider}' is not "
+                "configured. Add a 'providers' entry with apiKey/apiBase for it in "
+                "config.json, or set tools.imageGeneration.provider to a registered "
+                "provider (openrouter, aihubmix, openai, custom, gemini, ...)."
+            )
 
         requested = count or 1
         if requested > self.config.max_images_per_turn:
