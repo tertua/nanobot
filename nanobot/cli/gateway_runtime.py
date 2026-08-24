@@ -322,6 +322,7 @@ def _run_gateway(
     from nanobot.providers.fallback_provider import FallbackProvider
     from nanobot.providers.image_generation import image_gen_provider_configs
     from nanobot.session.manager import SessionManager
+    from nanobot.session.recovery import RecoveryCoordinator
     from nanobot.session.webui_turns import (
         WebuiTurnCoordinator,
         WebuiTurnRoutePolicy,
@@ -422,6 +423,12 @@ def _run_gateway(
     tools = ToolRegistry()
     mcp_provider = MCPProvider.from_config(config, tools)
 
+    recovery = RecoveryCoordinator(
+        sessions=session_manager,
+        bus=bus,
+        unified_session=config.agents.defaults.unified_session,
+    )
+
     # Create agent with cron service
     agent = AgentLoop.from_config(
         config, bus,
@@ -440,6 +447,7 @@ def _run_gateway(
         local_trigger_store=trigger_store,
         hook_factories=[create_file_edit_activity_hook],
         tool_registry=tools,
+        recovery_admission=recovery,
     )
     def _schedule_webui_background(awaitable: Awaitable[None]) -> None:
         agent.schedule_background(cast(Coroutine[Any, Any, None], awaitable))
@@ -448,6 +456,7 @@ def _run_gateway(
         bus=bus,
         sessions=session_manager,
         schedule_background=_schedule_webui_background,
+        recovery=recovery,
     )
     webui_turn_coordinator.subscribe(runtime_events)
     from nanobot.bus.events import OutboundMessage
@@ -684,6 +693,7 @@ def _run_gateway(
         webui_mcp_runtime_status=mcp_provider.runtime_status,
         webui_mcp_reload=mcp_provider.reload,
         webui_skill_state_action=_webui_skill_state_action,
+        webui_recovery_action=recovery.handle_action,
         config_path=Path(config_path),
     )
 
@@ -850,6 +860,7 @@ def _run_gateway(
         tasks: list[asyncio.Task[Any]] = []
         shutdown_task: asyncio.Task[Any] | None = None
         runtime_tasks: asyncio.Future[list[Any]] | None = None
+        startup_complete = False
         shutdown_event = asyncio.Event()
         cli_terminal._ensure_interactive_tty_mode()
         restore_shutdown_handlers = _install_gateway_shutdown_handlers(
@@ -862,6 +873,10 @@ def _run_gateway(
             await cron.start()
             # Re-read once on first admission to close the watcher subscription window.
             agent.runtime_resolver.invalidate()
+            # Recovery must finish before WebSocket and other channels begin
+            # accepting new input.  That makes a new user message reliably
+            # supersede an old recoverable turn instead of racing its queue.
+            await recovery.scan()
             async def _run_agent() -> None:
                 try:
                     await mcp_provider.connect()
@@ -916,6 +931,7 @@ def _run_gateway(
                     name="nanobot-webui-dev-server",
                 ))
             runtime_tasks = asyncio.gather(*tasks)
+            startup_complete = True
             shutdown_task = asyncio.create_task(
                 shutdown_event.wait(),
                 name="nanobot-gateway-shutdown",
@@ -937,6 +953,10 @@ def _run_gateway(
 
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
+            if not startup_complete:
+                # Do not report a successful gateway command when startup
+                # failed before any runtime task or listener was created.
+                raise typer.Exit(1)
         finally:
             try:
                 if shutdown_task and not shutdown_task.done():
@@ -944,6 +964,10 @@ def _run_gateway(
                     with suppress(asyncio.CancelledError):
                         await shutdown_task
                 cron.stop()
+                # A gateway exit interrupts ownership of active turns; it is
+                # not the same as the user stopping a turn.  Keep checkpoints
+                # so the next gateway can offer an explicit Continue action.
+                agent.preserve_inflight_turns_on_shutdown()
                 agent.stop()
                 # Cancel runtime tasks first, then deterministically close
                 # exec/MCP resources while the event loop is still alive.

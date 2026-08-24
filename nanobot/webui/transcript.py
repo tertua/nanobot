@@ -1813,24 +1813,20 @@ def replay_transcript_to_ui_messages(
                 break
             content = str(candidate.get("content") or "")
             has_answer = len(content) > 0
+            if has_answer:
+                break
+            # A completed reasoning field is closed even while its assistant
+            # placeholder remains streaming for the rest of the turn.
             if (
                 candidate.get("reasoningStreaming")
-                or candidate.get("reasoning") is not None
-                or has_answer
-                or candidate.get("isStreaming")
+                or (
+                    candidate.get("isStreaming")
+                    and candidate.get("reasoning") is None
+                )
             ):
                 prev[i] = {
                     **candidate,
                     "reasoning": (str(candidate.get("reasoning") or "")) + chunk,
-                    "reasoningStreaming": True,
-                    "activitySegmentId": candidate.get("activitySegmentId") or _ensure_activity_segment(),
-                    **turn_fields,
-                }
-                return
-            if not has_answer and candidate.get("isStreaming"):
-                prev[i] = {
-                    **candidate,
-                    "reasoning": chunk,
                     "reasoningStreaming": True,
                     "activitySegmentId": candidate.get("activitySegmentId") or _ensure_activity_segment(),
                     **turn_fields,
@@ -1870,7 +1866,14 @@ def replay_transcript_to_ui_messages(
             return None
         return str(last.get("id"))
 
-    def demote_interrupted_assistant(segment: str) -> None:
+    def close_interrupted_assistant() -> None:
+        """Close an answer segment before tool activity without changing its semantics.
+
+        The wire protocol already marks answer, reasoning, and activity phases.
+        A later tool event does not turn previously emitted answer text into
+        reasoning; preserving ``content`` also keeps live and replay projections
+        equivalent.
+        """
         nonlocal buffer_message_id, buffer_parts
         for i in range(len(messages) - 1, -1, -1):
             candidate = messages[i]
@@ -1886,19 +1889,7 @@ def replay_transcript_to_ui_messages(
                 or candidate.get("media")
             ):
                 continue
-            reasoning_parts = [
-                part
-                for part in (candidate.get("reasoning"), content)
-                if isinstance(part, str) and part.strip()
-            ]
-            messages[i] = {
-                **candidate,
-                "content": "",
-                "reasoning": "\n\n".join(reasoning_parts),
-                "reasoningStreaming": False,
-                "isStreaming": False,
-                "activitySegmentId": candidate.get("activitySegmentId") or segment,
-            }
+            messages[i] = {**candidate, "isStreaming": False}
             if buffer_message_id == candidate.get("id"):
                 buffer_message_id = None
                 buffer_parts = []
@@ -1919,19 +1910,6 @@ def replay_transcript_to_ui_messages(
             and not m.get("reasoningStreaming")
             and not m.get("media")
         )
-
-    def is_tool_trace_at(index: int) -> bool:
-        m = messages[index] if 0 <= index < len(messages) else None
-        return bool(m and m.get("kind") == "trace")
-
-    def prune_reasoning_only() -> None:
-        nonlocal messages
-        kept: list[dict[str, Any]] = []
-        for i, m in enumerate(messages):
-            if is_reasoning_only_placeholder(m) and not is_tool_trace_at(i + 1):
-                continue
-            kept.append(m)
-        messages = kept
 
     def stamp_completion(
         *,
@@ -2069,7 +2047,7 @@ def replay_transcript_to_ui_messages(
         if not segment:
             segment = _new_activity_segment(activate=False)
             active_file_edit_segment_id = segment
-        demote_interrupted_assistant(segment)
+        close_interrupted_assistant()
         strip_covered_file_edit_tool_hints_from_recent_messages(edits, turn_fields)
         target_index = find_file_edit_trace_index(segment, edits)
         if target_index is not None:
@@ -2363,7 +2341,7 @@ def replay_transcript_to_ui_messages(
                 if not trace_lines:
                     continue
                 segment = _ensure_activity_segment()
-                demote_interrupted_assistant(segment)
+                close_interrupted_assistant()
                 last = messages[-1] if messages else None
                 if (
                     last
@@ -2447,7 +2425,6 @@ def replay_transcript_to_ui_messages(
             for i, m in enumerate(messages):
                 if m.get("isStreaming"):
                     messages[i] = {**m, "isStreaming": False}
-            prune_reasoning_only()
             lat = rec.get("latency_ms")
             usage = rec.get("usage")
             sanitized_usage = (
@@ -2544,6 +2521,19 @@ def has_pending_tool_calls(
         if ev in {WEBUI_FORK_MARKER_EVENT}:
             continue
     return False
+
+
+def has_unfinished_transcript_tail(session_key: str) -> bool:
+    """Return whether the active transcript ends in an unfinished turn.
+
+    Recovery runs at gateway startup and only needs the newest, still-active
+    turn. Completed turns are rotated into immutable segment files, so reading
+    every historical segment here would make restart cost grow with the full
+    conversation history.
+    """
+    return has_pending_tool_calls(
+        _read_transcript_file(webui_transcript_path(session_key))
+    )
 
 
 def completed_turn_ids(lines: list[dict[str, Any]]) -> list[str]:
