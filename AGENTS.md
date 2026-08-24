@@ -89,10 +89,12 @@ Key entrypoints:
 Default: `~/.nanobot/config.json`. Override with `--config`. Env vars: `NANOBOT_*` with `__` as nested delimiter.
 
 This fork applies whitelists on generated config (`get_provider_whitelist()` / `_CHANNEL_WHITELIST` in `loader.py`, applied in `save_config()` and `_onboard_plugins()`):
-- **Providers**: openai, custom, aihubmix, openrouter, nvidia (others omitted from config.json)
+- **Providers**: openai, custom, aihubmix, openrouter, nvidia (other *built-in* providers omitted from config.json). Dynamic custom providers (any extra key under `providers`) are always preserved.
 - **Channels**: telegram, whatsapp, websocket, email, cli (others omitted)
 
 The WebUI settings view filters providers through the same whitelist (`nanobot/webui/settings_models.py`).
+
+Dynamic custom providers also work for image generation: `tools.imageGeneration.provider` may name any extra key under `providers`; it is served by the generic OpenAI-compatible `CustomImageGenerationProvider` (requires `apiBase`) and appears in the WebUI image-generation provider list.
 
 ## Upstream sync playbook
 

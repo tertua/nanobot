@@ -15,7 +15,7 @@ from nanobot.audio.transcription_registry import (
     resolve_transcription_provider,
     transcription_provider_names,
 )
-from nanobot.config.schema import Config
+from nanobot.config.schema import Config, ProviderConfig
 from nanobot.optional_features import (
     OptionalFeatureError,
     extra_installed,
@@ -120,6 +120,26 @@ def _image_generation_provider_rows(
                     if image_provider and image_provider.model_options
                     else None
                 ),
+            }
+        )
+    # Custom provider dinamis (key tambahan di bawah "providers")
+    for name, provider_config in (config.providers.model_extra or {}).items():
+        if not isinstance(provider_config, ProviderConfig):
+            continue
+        rows.append(
+            {
+                "name": name,
+                "label": name,
+                "configured": bool(
+                    getattr(provider_config, "api_key", None)
+                    or getattr(provider_config, "api_base", None)
+                ),
+                "auth_type": "api_key",
+                "api_key_hint": mask_secret_hint(getattr(provider_config, "api_key", None)),
+                "api_base": getattr(provider_config, "api_base", None),
+                "default_api_base": None,
+                "models": [],
+                "default_model": None,
             }
         )
     return rows
@@ -409,7 +429,15 @@ def update_image_generation_settings(
         provider_name = provider_name.strip().lower()
         if not provider_name:
             raise WebUISettingsError("image generation provider is required")
-        if get_image_gen_provider(provider_name) is None:
+
+        def _is_dynamic_custom(name: str) -> bool:
+            normalized = name.replace("-", "_").lower()
+            return any(
+                key.replace("-", "_").lower() == normalized
+                for key in (config.providers.model_extra or {})
+            )
+
+        if get_image_gen_provider(provider_name) is None and not _is_dynamic_custom(provider_name):
             raise WebUISettingsError("unknown image generation provider")
         if image_config.provider != provider_name:
             image_config.provider = provider_name

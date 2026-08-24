@@ -134,8 +134,16 @@ class ImageGenerationTool(Tool):
     def _provider_client(self) -> ImageGenerationProvider | None:
         provider = self._provider_config()
         cls = get_image_gen_provider(self.config.provider)
+        dynamic_name = None
         if cls is None:
-            return None
+            # Custom provider dinamis (key di luar registry): pakai client
+            # OpenAI-compatible generik dengan apiBase dari config provider.
+            if provider is None:
+                return None
+            cls = get_image_gen_provider("custom")
+            if cls is None:
+                return None
+            dynamic_name = self.config.provider
         kwargs: dict[str, Any] = {
             "api_key": provider.api_key if provider and isinstance(provider.api_key, str) else None,
             "api_base": provider.api_base if provider and isinstance(provider.api_base, str) else None,
@@ -145,7 +153,10 @@ class ImageGenerationTool(Tool):
             if provider and isinstance(provider.extra_body, dict) else None,
             "proxy": provider.proxy if provider and isinstance(provider.proxy, str) else None,
         }
-        return cls(**kwargs)
+        client = cls(**kwargs)
+        if dynamic_name is not None:
+            client.provider_name = dynamic_name
+        return client
 
     def _resolve_reference_image(self, value: str) -> str:
         access = current_tool_workspace(self.workspace, restrict_to_workspace=True)

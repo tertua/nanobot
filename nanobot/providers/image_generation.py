@@ -264,11 +264,16 @@ def image_gen_provider_names() -> tuple[str, ...]:
 
 def image_gen_provider_configs(config: Config) -> dict[str, ProviderConfig]:
     providers_cfg = config.providers
-    return {
+    configs = {
         name: pc
         for name in _IMAGE_GEN_PROVIDERS
         if (pc := getattr(providers_cfg, name, None)) is not None
     }
+    # Custom provider dinamis (key tambahan apa pun di bawah "providers")
+    for name, pc in (providers_cfg.model_extra or {}).items():
+        if isinstance(pc, ProviderConfig):
+            configs.setdefault(name, pc)
+    return configs
 
 
 # ---------------------------------------------------------------------------
