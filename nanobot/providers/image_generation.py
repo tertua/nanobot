@@ -1348,14 +1348,6 @@ class CustomImageGenerationClient(ImageGenerationProvider):
         if not self.api_base:
             raise ImageGenerationError(self.missing_base_message)
 
-        if reference_images:
-            logger.warning(
-                "Custom image generation does not support reference images; "
-                "ignoring {} reference image(s) for {}",
-                len(reference_images),
-                model,
-            )
-
         headers: dict[str, str] = {
             "Content-Type": "application/json",
         }
@@ -1370,9 +1362,24 @@ class CustomImageGenerationClient(ImageGenerationProvider):
             "n": 1,
             "size": self._custom_size(aspect_ratio, image_size),
         }
+
+        refs = list(reference_images or [])
+        if refs:
+            # Image-to-image / multi-image composition: OpenAI-style custom
+            # providers (e.g. Agnes Image) accept reference images as Data URI
+            # or URL values inside a literal "extra_body.image" array.
+            body["extra_body"] = {
+                "image": [image_path_to_data_url(path) for path in refs],
+                "response_format": "b64_json",
+            }
         body = _merge_extra_body(body, self.extra_body)
 
-        logger.info("Custom Images API request: POST {}/images/generations body={}", self.api_base, body)
+        logger.info(
+            "Custom Images API request: POST {}/images/generations body={} reference_images={}",
+            self.api_base,
+            body,
+            len(refs),
+        )
 
         response = await self._http_post(
             f"{self.api_base}/images/generations",
