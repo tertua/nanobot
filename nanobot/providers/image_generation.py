@@ -237,11 +237,19 @@ async def _download_image_data_url(
 def _merge_extra_body(body: dict[str, Any], extra_body: dict[str, Any] | None) -> dict[str, Any]:
     """Merge ``extraBody`` into *body*; null values drop the default key (opt-out).
 
+    An OpenAI-SDK-style nested ``extra_body`` dict is merged into *body* first so
+    it is sent as real request fields instead of a literal ``extra_body``
+    wrapper (some providers hang on the unknown ``extra_body`` field).
     Consistent across all clients: defaults such as ``response_format`` can be
     disabled per-request via ``"extraBody": {"response_format": null}``.
     """
     if extra_body:
-        body.update(extra_body)
+        nested = extra_body.get("extra_body")
+        if isinstance(nested, dict):
+            body.update(nested)
+        for key, value in extra_body.items():
+            if key != "extra_body":
+                body[key] = value
     return {key: value for key, value in body.items() if value is not None}
 
 
@@ -365,6 +373,10 @@ class ImageGenerationProvider(ABC):
         kwargs: dict[str, Any] = {"timeout": self.timeout}
         if self.proxy:
             kwargs["proxy"] = self.proxy
+            kwargs["trust_env"] = False
+        else:
+            # No explicit proxy: route directly to the provider URL and never
+            # fall back to HTTP(S)_PROXY/ALL_PROXY env vars (portable/direct).
             kwargs["trust_env"] = False
         return kwargs
 
