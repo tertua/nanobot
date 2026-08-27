@@ -26,7 +26,7 @@ from loguru import logger  # noqa: E402
 
 # Remove default handler and re-add with unified nanobot format
 logger.remove()
-_log_handler_id = logger.add(
+logger.add(
     sys.stderr,
     format=(
         "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
@@ -55,7 +55,7 @@ from nanobot.cli import terminal as cli_terminal  # noqa: E402
 from nanobot.cli.agent import agent  # noqa: E402
 from nanobot.cli.gateway import create_gateway_app  # noqa: E402
 from nanobot.cli.gateway_runtime import _run_gateway  # noqa: E402
-from nanobot.cli.log_control import _set_nanobot_logs  # noqa: E402
+from nanobot.cli.log_control import _set_nanobot_logs, setup_logging  # noqa: E402
 from nanobot.cli.process_identity import set_cli_process_identity  # noqa: E402
 from nanobot.cli.provider import provider_app  # noqa: E402
 from nanobot.cli.runtime_config import (  # noqa: E402
@@ -358,7 +358,7 @@ def serve(
     from nanobot.providers.image_generation import image_gen_provider_configs
     from nanobot.session.manager import SessionManager
 
-    _set_nanobot_logs(verbose)
+    setup_logging(verbose=verbose)
 
     runtime_config = _load_runtime_config(config, workspace)
     api_cfg = runtime_config.api
@@ -441,7 +441,6 @@ app.command(name="webui")(webui)
 app.add_typer(
     create_gateway_app(
         console=console,
-        log_handler_id=_log_handler_id,
         load_runtime_config=_load_runtime_config,
         run_gateway=_run_gateway,
         validate_startup_config=_validate_gateway_startup,

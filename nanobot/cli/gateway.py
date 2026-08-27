@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import typer
-from loguru import logger
 from rich.console import Console
 
 from nanobot.config.schema import Config
@@ -48,7 +46,6 @@ def _resolved_config_selector(config: str | None) -> Path:
 def create_gateway_app(
     *,
     console: Console,
-    log_handler_id: int,
     load_runtime_config: RuntimeConfigLoader,
     run_gateway: GatewayRunner,
     validate_startup_config: GatewayConfigValidator | None = None,
@@ -63,21 +60,9 @@ def create_gateway_app(
     )
 
     def configure_logging(verbose: bool) -> None:
-        if not verbose:
-            return
-        logger.remove(log_handler_id)
-        logger.add(
-            sys.stderr,
-            format=(
-                "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-                "<level>{level: <5}</level> | "
-                "<cyan>{extra[channel]}</cyan> | "
-                "<level>{message}</level>"
-            ),
-            level="DEBUG",
-            colorize=None,
-            filter=lambda record: record["extra"].setdefault("channel", "-") or True,
-        )
+        from nanobot.cli.log_control import setup_logging
+
+        setup_logging(verbose=verbose)
 
     def instance_for_selectors(
         *,

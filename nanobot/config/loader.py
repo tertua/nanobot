@@ -36,6 +36,11 @@ def get_config_path() -> Path:
     """Get the configuration file path."""
     if _current_config_path:
         return _current_config_path
+    from nanobot.config.portable import data_root
+
+    root = data_root()
+    if root is not None:
+        return root / "config.json"
     return Path.home() / ".nanobot" / "config.json"
 
 

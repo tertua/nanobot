@@ -859,6 +859,14 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         return []
     if not tpl.is_dir():
         return []
+    # Nanowin: prefer custom templates bundled next to the install (data/../scripts/templates)
+    from nanobot.config.portable import data_root
+
+    root = data_root()
+    if root is not None:
+        custom_tpl = root.parent / "scripts" / "templates"
+        if custom_tpl.is_dir():
+            tpl = custom_tpl
 
     added: list[str] = []
 

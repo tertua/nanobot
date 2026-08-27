@@ -77,12 +77,17 @@ class MemoryStore:
     def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
         self.workspace = workspace
         self.max_history_entries = max_history_entries
-        self.memory_dir = ensure_dir(workspace / "memory")
+        # Nanowin: pin memory to the portable data workspace so memory survives
+        # workspace scope changes and never leaks to the host ~/.nanobot.
+        from nanobot.config.portable import data_root
+
+        _mem_ws = data_root() / "workspace" if data_root() is not None else workspace
+        self.memory_dir = ensure_dir(_mem_ws / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
         self.legacy_history_file = self.memory_dir / "HISTORY.md"
-        self.soul_file = workspace / "SOUL.md"
-        self.user_file = workspace / "USER.md"
+        self.soul_file = _mem_ws / "SOUL.md"
+        self.user_file = _mem_ws / "USER.md"
         self._cursor_file = self.memory_dir / ".cursor"
         self._dream_cursor_file = self.memory_dir / ".dream_cursor"
         self._corruption_logged = False  # rate-limit invalid cursor warning
@@ -90,7 +95,7 @@ class MemoryStore:
         self._oversize_logged = False  # rate-limit oversized-entry warning
         self._dream_prompt_oversize_logged = False
         self._append_lock = threading.Lock()  # serialize cursor allocation + append
-        self._git = GitStore(workspace, tracked_files=[
+        self._git = GitStore(_mem_ws, tracked_files=[
             "SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor",
         ])
         self._maybe_migrate_legacy_history()

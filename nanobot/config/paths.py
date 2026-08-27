@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from nanobot.config.portable import data_root
 from nanobot.utils.helpers import ensure_dir
+
+
+def _default_nanobot_home() -> Path:
+    """Return the portable data root if present, else the upstream home path."""
+    root = data_root()
+    return root if root is not None else Path.home() / ".nanobot"
 
 
 def get_config_path() -> Path:
@@ -50,22 +57,23 @@ def get_webui_dir() -> Path:
 
 def get_workspace_path(workspace: str | Path | None = None) -> Path:
     """Resolve and ensure the agent workspace path."""
-    path = Path(workspace).expanduser() if workspace else Path.home() / ".nanobot" / "workspace"
-    return ensure_dir(path)
+    if workspace:
+        return ensure_dir(Path(workspace).expanduser())
+    return ensure_dir(_default_nanobot_home() / "workspace")
 
 
 def is_default_workspace(workspace: str | Path | None) -> bool:
     """Return whether a workspace resolves to nanobot's default workspace path."""
-    current = Path(workspace).expanduser() if workspace is not None else Path.home() / ".nanobot" / "workspace"
-    default = Path.home() / ".nanobot" / "workspace"
+    current = Path(workspace).expanduser() if workspace is not None else _default_nanobot_home() / "workspace"
+    default = _default_nanobot_home() / "workspace"
     return current.resolve(strict=False) == default.resolve(strict=False)
 
 
 def get_cli_history_path() -> Path:
     """Return the shared CLI history file path."""
-    return Path.home() / ".nanobot" / "history" / "cli_history"
+    return _default_nanobot_home() / "history" / "cli_history"
 
 
 def get_legacy_sessions_dir() -> Path:
     """Return the legacy global session directory used for migration fallback."""
-    return Path.home() / ".nanobot" / "sessions"
+    return _default_nanobot_home() / "sessions"

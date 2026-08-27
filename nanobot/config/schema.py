@@ -113,10 +113,21 @@ class ModelPresetConfig(Base):
         )
 
 
+def _default_workspace() -> str:
+    """Default workspace path: portable ``data/workspace`` or ``~/.nanobot/workspace``."""
+    from nanobot.config.portable import data_root
+
+    root = data_root()
+    if root is not None:
+        return str(root / "workspace")
+    return "~/.nanobot/workspace"
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
-    workspace: str = "~/.nanobot/workspace"
+    workspace: str = Field(default_factory=_default_workspace)
+
     model_preset: str | None = None  # Active preset name — takes precedence over fields below
     model: str = "anthropic/claude-opus-4-5"
     provider: str = (

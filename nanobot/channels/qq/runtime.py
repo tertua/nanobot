@@ -44,7 +44,7 @@ from nanobot.security.network import validate_url_target
 from nanobot.utils.logging_bridge import redirect_lib_logging
 
 try:
-    from nanobot.config.paths import get_media_dir
+    from nanobot.config.paths import get_data_dir, get_media_dir
 except Exception:  # pragma: no cover
     get_media_dir = None  # type: ignore
 
@@ -230,9 +230,9 @@ class QQChannel(BaseChannel):
             try:
                 root = Path(get_media_dir("qq"))
             except Exception:
-                root = Path.home() / ".nanobot" / "media" / "qq"
+                root = get_data_dir() / "media" / "qq"
         else:
-            root = Path.home() / ".nanobot" / "media" / "qq"
+            root = get_data_dir() / "media" / "qq"
 
         root.mkdir(parents=True, exist_ok=True)
         self.logger.info("media directory: {}", str(root))

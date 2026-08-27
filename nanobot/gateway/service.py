@@ -135,8 +135,10 @@ class GatewayServiceInstaller:
         label = _launchd_label(options.name)
         path = self.home / "Library" / "LaunchAgents" / f"{label}.plist"
         log_stem = _safe_service_name(options.name)
-        stdout_path = self.home / ".nanobot" / "logs" / f"{log_stem}.launchd.log"
-        stderr_path = self.home / ".nanobot" / "logs" / f"{log_stem}.launchd.err.log"
+        from nanobot.config.paths import get_logs_dir
+
+        stdout_path = get_logs_dir() / f"{log_stem}.launchd.log"
+        stderr_path = get_logs_dir() / f"{log_stem}.launchd.err.log"
         payload = {
             "Label": label,
             "ProgramArguments": build_gateway_command(options.python_executable, options.start),

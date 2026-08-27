@@ -12,7 +12,7 @@ import typer
 from rich.console import Console
 
 from nanobot import __logo__
-from nanobot.cli.log_control import _set_nanobot_logs
+from nanobot.cli.log_control import setup_logging
 from nanobot.cli.runtime_config import (
     _load_runtime_config,
     _migrate_cron_store,
@@ -166,7 +166,7 @@ def agent(
     tools = ToolRegistry()
     mcp_provider = MCPProvider.from_config(runtime_config, tools)
 
-    _set_nanobot_logs(logs)
+    setup_logging(verbose=logs)
 
     try:
         agent_loop = agent_loop_class.from_config(
