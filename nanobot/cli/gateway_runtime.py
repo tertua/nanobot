@@ -45,6 +45,14 @@ from nanobot.webui.sidebar_state import read_webui_sidebar_state
 
 __all__ = ["_run_gateway"]
 
+# Bound loggers that stay visible on the terminal without ``--verbose`` (see
+# ``nanobot.cli.log_control._terminal_filter``). They tag records with an
+# ``extra["system"]`` value so the terminal filter can let them through while
+# the rest of the ``nanobot`` namespace stays suppressed.
+cron_logger = logger.bind(system="cron")
+heartbeat_logger = logger.bind(system="heartbeat")
+dream_logger = logger.bind(system="dream")
+
 console = Console()
 
 
@@ -576,7 +584,7 @@ def _run_gateway(
             try:
                 result = store.build_dream_prompt()
                 if result is None:
-                    logger.info("Dream: nothing to process")
+                    dream_logger.info("Dream: nothing to process")
                     return None
                 prompt, last_cursor = result
                 key = dream_session_key()
@@ -597,28 +605,28 @@ def _run_gateway(
                 if completed:
                     store.set_last_dream_cursor(last_cursor)
                     if diff_body:
-                        logger.info(
+                        dream_logger.info(
                             "Dream cron job completed, cursor advanced to {}",
                             last_cursor,
                         )
                     else:
-                        logger.info(
+                        dream_logger.info(
                             "Dream cron job completed with no memory changes; "
                             "cursor advanced to {}",
                             last_cursor,
                         )
                 else:
-                    logger.warning(
+                    dream_logger.warning(
                         "Dream cron job did not complete ({}); cursor remains at {}",
                         MemoryStore.dream_incompletion_reason(resp),
                         store.get_last_dream_cursor(),
                     )
             except Exception:
-                logger.exception("Dream cron job failed")
+                dream_logger.exception("Dream cron job failed")
             finally:
                 sha = _commit_dream_changes(store)
                 if sha:
-                    logger.info("Dream commit: {}", sha)
+                    dream_logger.info("Dream commit: {}", sha)
                 store.compact_history()
                 prune_dream_sessions(agent.sessions)
             return None
@@ -629,10 +637,10 @@ def _run_gateway(
             try:
                 content = heartbeat_file.read_text(encoding="utf-8")
             except OSError:
-                logger.debug("Heartbeat: HEARTBEAT.md missing")
+                heartbeat_logger.debug("Heartbeat: HEARTBEAT.md missing")
                 return None
             if not _heartbeat_has_active_tasks(content):
-                logger.debug("Heartbeat: HEARTBEAT.md has no active tasks")
+                heartbeat_logger.debug("Heartbeat: HEARTBEAT.md has no active tasks")
                 return None
 
             channel, chat_id = _pick_heartbeat_target()
@@ -686,20 +694,20 @@ def _run_gateway(
                 )
 
             if should_notify:
-                logger.info("Heartbeat: completed, delivering response")
+                heartbeat_logger.info("Heartbeat: completed, delivering response")
                 await _deliver_to_channel(
                     OutboundMessage(channel=channel, chat_id=chat_id, content=response),
                     record=True,
                 )
             else:
-                logger.info("Heartbeat: silenced by post-run evaluation")
+                heartbeat_logger.info("Heartbeat: silenced by post-run evaluation")
             return response
 
         if is_bound_cron_job(job):
             return await run_bound_cron_job(job, agent=agent, cron=cron)
 
         reason = "unbound agent cron job must be recreated from a chat session"
-        logger.warning(
+        cron_logger.warning(
             "Cron: skipped unbound agent job '{}' ({}): {}",
             job.name,
             job.id,
