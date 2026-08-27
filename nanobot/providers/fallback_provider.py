@@ -157,10 +157,6 @@ class FallbackProvider(LLMProvider):
         super().set_llm_call_observer(observer)
         self._primary.set_llm_call_observer(observer)
 
-    @property
-    def supports_progress_deltas(self) -> bool:
-        return bool(getattr(self._primary, "supports_progress_deltas", False))
-
     def can_resume_conversation_state(
         self,
         state: ProviderConversationState,
@@ -186,6 +182,7 @@ class FallbackProvider(LLMProvider):
         return ProviderCallContext(
             conversation_state=provider_context.conversation_state,
             context_window_tokens=context_window_tokens,
+            session_id=provider_context.session_id,
         )
 
     def _primary_available(self) -> bool:
@@ -541,6 +538,7 @@ class FallbackProvider(LLMProvider):
                 fallback_kwargs["provider_context"] = ProviderCallContext(
                     conversation_state=state,
                     context_window_tokens=context_window_tokens,
+                    session_id=provider_context.session_id,
                 )
             if fallback.reasoning_effort is None:
                 fallback_kwargs.pop("reasoning_effort", None)
