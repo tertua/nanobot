@@ -9,6 +9,7 @@ import {
 } from "@opentui/core"
 import {
   MockTreeSitterClient,
+  TestRecorder,
   createTestRenderer,
   type TestRendererSetup,
 } from "@opentui/core/testing"
@@ -21,7 +22,7 @@ import type {
   SlashCommand,
   WorkspaceScopePayload,
 } from "./protocol"
-import type { HostAgentState, HostMetadata, TuiHost } from "./host"
+import type { TuiHost } from "./host"
 import type { ClipboardImageReader } from "./clipboard-image"
 import { userMessageText, type Transcript } from "./transcript"
 
@@ -205,7 +206,7 @@ describe("NanobotTui layout", () => {
       expect(occurrences(frame, "Ask nanobot anything")).toBe(1)
       expect(occurrences(frame, "Ready")).toBe(0)
       expect(occurrences(frame, "Getting ready…")).toBe(1)
-      expect(occurrences(frame, "nanobot  ·  test/model")).toBe(1)
+      expect(occurrences(frame, "default ▾")).toBe(1)
     }
 
     app.accept({ event: "attached", chat_id: "chat" })
@@ -251,6 +252,23 @@ describe("NanobotTui layout", () => {
     await waitUntil(() => sent.length > 0)
 
     expect(sent).toEqual(["你好"])
+  })
+
+  test("keeps input typed immediately after Enter in the next draft", async () => {
+    const sent: string[] = []
+    setup = await createRenderer({ width: 72, height: 20, screenMode: "alternate-screen" })
+    const app = mount(setup, sent)
+    app.accept({ event: "attached", chat_id: "chat" })
+    await Bun.sleep(1)
+    const composer = (app as unknown as { composer: TextareaRenderable }).composer
+
+    composer.setText("first")
+    setup.mockInput.pressEnter()
+    for (const key of "next") setup.mockInput.pressKey(key)
+    await waitUntil(() => sent.length > 0)
+
+    expect(sent).toEqual(["first"])
+    expect(composer.plainText).toBe("next")
   })
 
   test("inserts newlines with Shift+Enter and the universal Ctrl+J fallback", async () => {
@@ -415,8 +433,7 @@ describe("NanobotTui layout", () => {
 
     await setup.mockInput.typeText("这是什么？ ")
     setup.mockInput.pressKey("v", { ctrl: true })
-    await waitUntil(() => ui.status.plainText.includes("Pasted Image #1"), 3_000)
-    expect(ui.composer.plainText).toBe("这是什么？ [Image #1] ")
+    await waitUntil(() => ui.composer.plainText === "这是什么？ [Image #1] ")
     setup.mockInput.pressTab()
     expect(ui.status.plainText).toContain("Images cannot be queued")
     expect(ui.composer.plainText).toBe("这是什么？ [Image #1] ")
@@ -470,6 +487,17 @@ describe("NanobotTui layout", () => {
 
     setup.mockInput.pressArrow("right", { shift: true })
     await waitUntil(() => ui.composer.cursorOffset === 10)
+    await setup.mockInput.typeText("replacement")
+    await waitUntil(() => ui.draft.imageCount === 0)
+    expect(ui.composer.plainText).toContain("replacement")
+    expect(ui.composer.plainText).not.toContain("Image #1")
+
+    ui.composer.setText("")
+    setup.mockInput.pressKey("v", { ctrl: true })
+    await waitUntil(() => ui.composer.plainText === "[Image #1] ")
+    ui.composer.cursorOffset = 10
+    setup.mockInput.pressArrow("left", { shift: true })
+    await waitUntil(() => ui.composer.cursorOffset === 0)
     await setup.mockInput.typeText("replacement")
     await waitUntil(() => ui.draft.imageCount === 0)
     expect(ui.composer.plainText).toContain("replacement")
@@ -986,7 +1014,6 @@ describe("NanobotTui layout", () => {
     const ui = app as unknown as {
       composer: TextareaRenderable
       sessionMenu: { visible: boolean }
-      titleText: { plainText: string }
       runtimeControls: { modelText: { plainText: string } }
     }
 
@@ -1000,8 +1027,7 @@ describe("NanobotTui layout", () => {
       ui.composer.submit()
       await waitUntil(() => attached.length === 1)
       expect(attached).toEqual(["other"])
-      expect(ui.titleText.plainText).toContain("Release checklist")
-      expect(ui.runtimeControls.modelText.plainText).toContain("Deep Research")
+      expect(ui.runtimeControls.modelText.plainText).toBe("Deep Research ▾")
       expect(ui.runtimeControls.modelText.plainText).not.toContain("test/model")
 
       app.accept({ event: "attached", chat_id: "other" })
@@ -1010,8 +1036,7 @@ describe("NanobotTui layout", () => {
       ui.composer.submit()
       await waitUntil(() => newChats.length === 1)
       expect(newChats).toEqual(["new"])
-      expect(ui.titleText.plainText).toContain("New chat")
-      expect(ui.runtimeControls.modelText.plainText).toContain("test/model")
+      expect(ui.runtimeControls.modelText.plainText).toBe("default ▾")
     } finally {
       globalThis.fetch = original
     }
@@ -1183,7 +1208,8 @@ describe("NanobotTui layout", () => {
       model_preset: "Codex",
     })
     await setup.flush()
-    expect(ui.runtimeControls.modelText.plainText).toContain("Codex  ·  openai/gpt-5.6")
+    expect(ui.runtimeControls.modelText.plainText).toBe("Codex ▾")
+    expect(ui.runtimeControls.modelText.plainText).not.toContain("openai/gpt-5.6")
 
     app.accept({
       event: "runtime_model_updated",
@@ -1191,7 +1217,7 @@ describe("NanobotTui layout", () => {
       model_preset: "DeepSeek",
     })
     await setup.flush()
-    expect(ui.runtimeControls.modelText.plainText).toContain("Codex  ·  openai/gpt-5.6")
+    expect(ui.runtimeControls.modelText.plainText).toBe("Codex ▾")
     expect(ui.runtimeControls.modelText.plainText).not.toContain("DeepSeek")
   })
 
@@ -1213,8 +1239,8 @@ describe("NanobotTui layout", () => {
     })
     await setup.flush()
 
-    expect(ui.runtimeControls.modelText.plainText).toContain("deepseek/deepseek-chat")
-    expect(ui.runtimeControls.modelText.plainText).not.toContain("Codex")
+    expect(ui.runtimeControls.modelText.plainText).toBe("default ▾")
+    expect(ui.runtimeControls.modelText.plainText).not.toContain("deepseek/deepseek-chat")
   })
 
   test("refreshes the canonical preset after the model command completes", async () => {
@@ -1310,7 +1336,6 @@ describe("NanobotTui layout", () => {
         menuRoot: { getChildren(): unknown[] }
       }
       composer: TextareaRenderable
-      titleText: TextRenderable
       status: TextRenderable
       meta: TextRenderable
     }
@@ -1325,7 +1350,6 @@ describe("NanobotTui layout", () => {
       expect(ui.runtimeControls.modelText.selectable).toBe(false)
       expect(ui.runtimeControls.accessText.selectable).toBe(false)
       expect(ui.runtimeControls.contextText.selectable).toBe(false)
-      expect(ui.titleText.selectable).toBe(false)
       expect(ui.status.selectable).toBe(false)
       expect(ui.meta.selectable).toBe(false)
       app.accept({ event: "goal_status", chat_id: "chat", status: "running" })
@@ -1395,7 +1419,7 @@ describe("NanobotTui layout", () => {
     }
   })
 
-  test("opens and switches sessions from the clickable title", async () => {
+  test("switches sessions only through the sessions command", async () => {
     const original = globalThis.fetch
     globalThis.fetch = ((input: string | URL | Request) => {
       const url = String(input)
@@ -1421,14 +1445,18 @@ describe("NanobotTui layout", () => {
     const ui = app as unknown as {
       composer: TextareaRenderable
       sessionMenu: { visible: boolean; root: { getChildren(): unknown[] } }
-      titleText: TextRenderable
-      status: TextRenderable
+      title: { getChildren(): unknown[] }
     }
 
     try {
       await waitUntil(() => (app as unknown as { ready: boolean }).ready)
       await setup.renderOnce()
-      await setup.mockMouse.click(ui.titleText.x + 2, ui.titleText.y)
+      const titleItems = ui.title.getChildren() as TextRenderable[]
+      expect(titleItems.some((item) => item.id === "nanobot-tui-title-text")).toBe(false)
+      expect(ui.sessionMenu.visible).toBe(false)
+
+      ui.composer.setText("/sessions")
+      ui.composer.submit()
       await waitUntil(() => ui.sessionMenu.visible)
       await setup.flush()
       expect(ui.composer.placeholder).toBe("Search sessions")
@@ -1440,15 +1468,6 @@ describe("NanobotTui layout", () => {
       await setup.mockMouse.click(other.x + 2, other.y)
       await waitUntil(() => attached.length === 1)
       expect(attached).toEqual(["other"])
-      expect(ui.sessionMenu.visible).toBe(false)
-      expect(ui.composer.focused).toBe(true)
-      expect(ui.titleText.plainText).toContain("Release checklist")
-
-      app.accept({ event: "attached", chat_id: "other" })
-      await setup.mockMouse.click(ui.titleText.x + 2, ui.titleText.y)
-      await waitUntil(() => ui.sessionMenu.visible)
-      ui.composer.blur()
-      await setup.mockMouse.click(ui.status.x, ui.status.y)
       expect(ui.sessionMenu.visible).toBe(false)
       expect(ui.composer.focused).toBe(true)
     } finally {
@@ -1716,7 +1735,7 @@ describe("NanobotTui layout", () => {
       await setup.flush()
       const frame = setup.captureCharFrame()
       expect(frame).toContain("Release checklist")
-      expect(occurrences(frame, "Current chat")).toBe(1)
+      expect(occurrences(frame, "Current chat")).toBe(0)
     } finally {
       globalThis.fetch = original
     }
@@ -1960,7 +1979,7 @@ describe("NanobotTui layout", () => {
       } else if (width >= 28 && height >= 9) {
         expect(occurrences(frame, "Enter now · Tab next")).toBe(1)
       }
-      expect(occurrences(frame, "nanobot  ·  test/model")).toBe(height >= 14 ? 1 : 0)
+      expect(occurrences(frame, "default ▾")).toBe(height >= 14 ? 1 : 0)
     }
   })
 
@@ -2045,6 +2064,86 @@ describe("NanobotTui layout", () => {
     }
   })
 
+  test("keeps streamed fenced code visible while completing the response", async () => {
+    setup = await createRenderer({ width: 100, height: 30, screenMode: "alternate-screen" })
+    const app = mount(setup)
+    const response = [
+      "Commit types:",
+      "",
+      "```text",
+      "feat:",
+      "fix:",
+      "perf:",
+      "docs:",
+      "test:",
+      "refactor:",
+      "chore:",
+      "```",
+      "",
+      "Include the reason in the body.",
+    ].join("\n")
+
+    app.accept({ event: "attached", chat_id: "chat" })
+    app.accept({ event: "delta", chat_id: "chat", text: response })
+    await setup.flush()
+    expect(setup.captureCharFrame()).toContain("feat:")
+
+    const recorder = new TestRecorder(setup.renderer)
+    recorder.rec()
+    app.accept({ event: "stream_end", chat_id: "chat" })
+    app.accept({ event: "turn_end", chat_id: "chat" })
+    await setup.flush()
+    recorder.stop()
+
+    expect(recorder.recordedFrames.length).toBeGreaterThan(0)
+    expect(recorder.recordedFrames.every(({ frame }) => frame.includes("feat:"))).toBeTrue()
+    expect(recorder.recordedFrames.every(({ frame }) => /│\s+feat:/u.test(frame))).toBeTrue()
+    expect(recorder.recordedFrames.every(({ frame }) => (
+      frame.includes("Include the reason in the body.")
+    ))).toBeTrue()
+  })
+
+  test("renders fenced plain text from light-theme history", async () => {
+    setup = await createRenderer({ width: 100, height: 30, screenMode: "alternate-screen" })
+    const app = NanobotTui.mount(
+      setup.renderer,
+      { ...options, theme: "light" },
+      client(),
+      new MockTreeSitterClient({ autoResolveTimeout: 0 }),
+    )
+    const response = [
+      "Commit types:",
+      "",
+      "```text",
+      "feat:",
+      "fix:",
+      "perf:",
+      "docs:",
+      "test:",
+      "refactor:",
+      "chore:",
+      "```",
+      "",
+      "Include the reason in the body.",
+    ].join("\n")
+    const transcript = (app as unknown as { transcript: Transcript }).transcript
+
+    transcript.history([{ role: "assistant", content: response }])
+    await setup.flush()
+
+    const codeLine = setup.captureSpans().lines.find((line) => (
+      line.spans.some((span) => span.text.includes("feat:"))
+    ))
+    const code = codeLine?.spans.find((span) => span.text.includes("feat:"))
+    const rail = codeLine?.spans.find((span) => span.text.includes("│"))
+    const frame = setup.captureCharFrame()
+
+    expect(frame).toContain("feat:")
+    expect(frame).toMatch(/│\s+feat:/u)
+    expect(code?.fg.toInts().slice(0, 3)).toEqual([24, 24, 27])
+    expect(rail?.fg.toInts().slice(0, 3)).toEqual([212, 212, 216])
+  })
+
   test("renders assistant LaTeX as Unicode text without changing code", async () => {
     setup = await createRenderer({ width: 96, height: 24, screenMode: "alternate-screen" })
     const app = mount(setup)
@@ -2095,7 +2194,7 @@ describe("NanobotTui layout", () => {
         syntaxStyle: { getStyle(name: string): { fg?: { toInts(): number[] } } | undefined } | null
       }
       transcript: {
-        markdown: Set<{ syntaxStyle: object }>
+        markdown: Set<{ fg?: { toInts(): number[] }; syntaxStyle: object }>
         frames: Set<{ borderColor: { toInts(): number[] } }>
         userRows: Set<{ backgroundColor: { intent: string; toInts(): number[] } }>
         userMessages: Set<{ renderable: TextRenderable }>
@@ -2129,6 +2228,7 @@ describe("NanobotTui layout", () => {
     expect(internals.composer.textColor.toInts().slice(0, 3)).toEqual([24, 24, 27])
     expect(sessionFrame?.borderColor.toInts().slice(0, 3)).toEqual([212, 212, 216])
     expect(userRow?.backgroundColor.toInts().slice(0, 3)).toEqual([240, 240, 240])
+    expect(markdown?.fg?.toInts().slice(0, 3)).toEqual([24, 24, 27])
     expect(markdown?.syntaxStyle).not.toBe(darkSyntax)
     expect(internals.composer.syntaxStyle).not.toBe(darkComposerSyntax)
     expect(internals.composer.syntaxStyle?.getStyle("image.placeholder")?.fg?.toInts().slice(0, 3))
@@ -3075,23 +3175,18 @@ describe("NanobotTui layout", () => {
   })
 })
 
-describe("NanobotTui in a Herdr pane", () => {
-  test("keeps local navigation while reporting task, session, lifecycle, and metadata", async () => {
-    const setup = await createTestRenderer({ width: 80, height: 22, screenMode: "main-screen" })
-    const states: Array<{ state: HostAgentState; message?: string }> = []
-    const metadata: HostMetadata[] = []
-    const sessions: string[] = []
+describe("NanobotTui with a Herdr pane title reporter", () => {
+  test("keeps the full terminal experience while reporting task titles", async () => {
+    const setup = await createTestRenderer({ width: 80, height: 22, screenMode: "alternate-screen" })
+    const titles: string[] = []
     let released = false
     const host: TuiHost = {
-      hosted: true,
-      reportState(state, message) { states.push({ state, ...(message ? { message } : {}) }) },
-      reportSession(sessionId) { sessions.push(sessionId) },
-      reportMetadata(value) { metadata.push(value) },
+      reportTitle(title) { titles.push(title) },
       release() { released = true },
     }
     const app = NanobotTui.mount(
       setup.renderer,
-      { ...options, branch: "feat/herdr" },
+      options,
       client(),
       new MockTreeSitterClient({ autoResolveTimeout: 0 }),
       host,
@@ -3127,10 +3222,14 @@ describe("NanobotTui in a Herdr pane", () => {
     })
     await setup.flush()
     const activeFrame = setup.captureCharFrame()
+    expect(activeFrame).toContain(">_  nanobot")
+    expect(activeFrame).toContain("default ▾")
     expect(occurrences(activeFrame, "› Ship the Herdr integration")).toBe(1)
     expect(occurrences(activeFrame, "app.ts")).toBe(1)
     expect(ui.composer.placeholder).toBe("Enter send now · Tab send next")
     expect(ui.composerFrame.height).toBe(3)
+    expect(titles).toEqual(["Ship the Herdr integration"])
+
     app.accept({
       event: "turn_end",
       chat_id: "chat",
@@ -3141,27 +3240,6 @@ describe("NanobotTui in a Herdr pane", () => {
         ui_summary: "Approval required",
       },
     })
-    await setup.flush()
-    const frame = setup.captureCharFrame()
-
-    expect(sessions).toEqual(["chat"])
-    expect(occurrences(frame, "› Ship the Herdr integration")).toBe(1)
-    expect(frame).not.toContain(">_  nanobot")
-    expect(frame).not.toContain("test/model")
-    expect(states.some(({ state }) => state === "working")).toBe(true)
-    expect(states.at(-1)).toEqual({ state: "blocked", message: "Approval required" })
-    expect(metadata.at(-1)).toMatchObject({
-      model: "default · test/model",
-      branch: "feat/herdr",
-      workspace: "/tmp/nanobot-workspace",
-      task: "Ship the Herdr integration",
-      action: "Approval required",
-    })
-
-    setup.resize(42, 6)
-    await setup.renderOnce()
-    expect(setup.captureCharFrame()).toContain("› Ship the Herdr integration")
-
     app.accept({
       event: "user_message",
       chat_id: "chat",
@@ -3169,13 +3247,8 @@ describe("NanobotTui in a Herdr pane", () => {
       turn_id: "turn-2",
       starts_turn: true,
     })
-    app.accept({
-      event: "turn_end",
-      chat_id: "chat",
-      turn_id: "turn-2",
-      goal_state: { active: false },
-    })
-    expect(states.at(-1)?.state).toBe("idle")
+
+    expect(titles).toEqual(["Ship the Herdr integration", "Approved"])
 
     app.stop()
     expect(released).toBe(true)
