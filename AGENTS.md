@@ -4,7 +4,7 @@
 
 Fork of HKUDS/nanobot (portable AI agent framework: Python core + chat-platform channels over an async message bus) with Windows-portable simplifications. Upstream docs live on the `main` branch; this `master` branch is the fork.
 
-Related repo: [tertua/nanowin](https://github.com/tertua/nanowin) — separate Windows portable *installer* repo (unrelated git history). It clones/downloads this repo's `master` at install time, then patches source files via `scripts/portable_paths.py`. See "nanowin patch anchors" before editing the files it touches.
+Related repo: [tertua/nanowin](https://github.com/tertua/nanowin) — separate Windows portable *installer* repo (unrelated git history). It clones/downloads this repo's `master` at install time; all portability handling lives in this fork's source (no post-install patching).
 
 **Language convention**: code, comments, log messages, error strings, and commit messages in English; conversation with the user in Indonesian.
 
@@ -64,19 +64,7 @@ The WebUI settings view applies the same provider filter (`webui/settings_models
 1. Most conflicts are modify/delete (fork deleted tests/docs/extra locales, upstream modified them): resolve with `git rm` — never restore them. Also `git rm -f` any brand-new `tests/**` files the merge stages.
 2. For content conflicts, take the **upstream version wholesale**, then re-apply fork bits — keeping the old fork side loses upstream refactors (this caused a real crash: schema.py lost `idle_compact_check_interval_seconds` while loop.py referenced it; azure/bedrock providers lost Responses-API refactors the same way).
 3. Re-apply fork bits (see below), then verify: `ruff check nanobot/`, import-smoke touched modules, `uv run nanobot --help`, `cd webui && bun run build && bunx vitest run`.
-4. Check nanowin patch anchors still match, and add any new startup-path dependency to nanowin's `scripts/requirements-lite.txt` (`tzlocal`, `packaging`, `httpx[socks]` were missed once).
-
-## nanowin patch anchors
-
-`scripts/portable_paths.py` in tertua/nanowin string-matches and rewrites these regions post-install; changing them breaks silent installs (`[WARN] pattern not found`):
-- `config/paths.py` — `Path.home() / ".nanobot" / ...` fallbacks
-- `config/loader.py` — `get_config_path()` body
-- `config/schema.py` — `workspace: str = "~/.nanobot/workspace"` default
-- `cli/commands.py` — `_set_nanobot_logs(verbose)` block in serve()
-- `cli/agent.py` — `_set_nanobot_logs(logs)`
-- `cli/gateway.py` — `configure_logging()` body
-- `utils/helpers.py` — `sync_workspace_templates()` pkg_files block
-- `agent/memory.py` — `__init__` memory paths + `GitStore(workspace, ...)`
+4. Check nanowin install path assumptions still hold, and add any new startup-path dependency to nanowin's `scripts/requirements-lite.txt` (`tzlocal`, `packaging`, `httpx[socks]` were missed once).
 
 ## Fork-specific notes (re-apply after taking upstream files)
 
