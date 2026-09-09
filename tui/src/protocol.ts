@@ -572,11 +572,17 @@ async function fetchApi(
   apiToken: string,
   path: string,
   reauthenticate?: ApiReauthenticator,
+  signal?: AbortSignal,
 ): Promise<Response> {
-  const request = (connection: GatewayApiConnection) => fetch(`${connection.apiUrl}${path}`, {
-    headers: { Authorization: `Bearer ${connection.apiToken}` },
-  })
+  const request = (connection: GatewayApiConnection) => {
+    signal?.throwIfAborted()
+    return fetch(`${connection.apiUrl}${path}`, {
+      headers: { Authorization: `Bearer ${connection.apiToken}` },
+      ...(signal ? { signal } : {}),
+    })
+  }
   const response = await request({ apiUrl, apiToken })
+  signal?.throwIfAborted()
   if (response.status !== 401 || !reauthenticate) return response
   return request(await reauthenticate(apiToken))
 }
@@ -592,6 +598,7 @@ async function fetchThreadPage(
   chatId: string,
   beforeCursor?: string | null,
   reauthenticate?: ApiReauthenticator,
+  signal?: AbortSignal,
 ): Promise<ThreadPage> {
   if (!apiUrl || !apiToken) return {}
   const key = encodeURIComponent(`websocket:${chatId}`)
@@ -602,6 +609,7 @@ async function fetchThreadPage(
     apiToken,
     `/api/sessions/${key}/webui-thread?${params}`,
     reauthenticate,
+    signal,
   )
   if (response.status === 404) return {}
   if (!response.ok) throw new Error(`history request failed: HTTP ${response.status}`)
@@ -614,8 +622,10 @@ export async function fetchSessionUsage(
   apiToken: string,
   chatId: string,
   reauthenticate?: ApiReauthenticator,
+  signal?: AbortSignal,
 ): Promise<SessionUsageSnapshot> {
-  const payload = await fetchThreadPage(apiUrl, apiToken, chatId, undefined, reauthenticate)
+  const payload = await fetchThreadPage(apiUrl, apiToken, chatId, undefined, reauthenticate, signal)
+  signal?.throwIfAborted()
   const snapshot: SessionUsageSnapshot = { context: null, rounds: [] }
   const seenTurns = new Set<unknown>()
   let contextResolved = false
