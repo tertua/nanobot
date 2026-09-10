@@ -2249,7 +2249,7 @@ export function ThreadComposer({
       <div
         ref={surfaceRef}
         className={cn(
-          "thread-composer-surface group/composer relative mx-auto flex w-full flex-col overflow-visible transition-all duration-200",
+          "thread-composer-surface group/composer relative mx-auto flex w-full flex-col overflow-visible transition-[background-color,border-color,box-shadow,opacity] duration-200",
           isHero
             ? "max-w-[58rem] rounded-prominent bg-muted/30 focus-within:bg-muted/50 dark:bg-card dark:focus-within:bg-white/[0.06]"
             : "max-w-[49.5rem] rounded-panel bg-muted/30 focus-within:bg-muted/50 dark:bg-card dark:focus-within:bg-white/[0.06]",

@@ -251,6 +251,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
   const messageContentRef = useRef<HTMLDivElement>(null);
   const emptyStateRef = useRef<HTMLDivElement>(null);
   const composerDockRef = useRef<HTMLDivElement>(null);
+  const previousLayoutModeRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastConversationKeyRef = useRef<string | null>(conversationKey);
   const conversationHandoffPendingRef = useRef(false);
@@ -334,6 +335,22 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
       ? forkBoundaryMessageCount - hiddenMessageCount
       : null;
   const hasComposer = composer !== null && composer !== undefined;
+  const layoutMode = hasComposer ? (hasMessages ? "thread" : "hero") : "external";
+  useLayoutEffect(() => {
+    const layout = contentRef.current;
+    const previousLayoutMode = previousLayoutModeRef.current;
+    previousLayoutModeRef.current = layoutMode;
+    if (!layout || previousLayoutMode === null || previousLayoutMode === layoutMode) return;
+
+    layout.setAttribute("data-layout-transition", "true");
+    const timeout = window.setTimeout(() => {
+      layout.removeAttribute("data-layout-transition");
+    }, 240);
+    return () => {
+      window.clearTimeout(timeout);
+      layout.removeAttribute("data-layout-transition");
+    };
+  }, [layoutMode]);
   const scrollButtonBottom =
     keyboardInsetBottom
     + (composerDockHeight > 0
@@ -853,7 +870,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
         <div
           ref={contentRef}
           data-testid={!hasMessages ? "thread-welcome-layout" : undefined}
-          data-layout={hasComposer ? (hasMessages ? "thread" : "hero") : "external"}
+          data-layout={layoutMode}
           className={cn(
             "thread-layout mx-auto grid min-h-full w-full",
             hasMessages

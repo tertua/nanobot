@@ -1305,6 +1305,51 @@ describe("ThreadViewport", () => {
       "data-layout",
       "thread",
     );
+    expect(dockedComposer.closest(".thread-layout")).toHaveAttribute(
+      "data-layout-transition",
+      "true",
+    );
+  });
+
+  it("limits the layout transition to mode changes", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <ThreadViewport
+          messages={emptyMessages}
+          isStreaming={false}
+          composer={<textarea data-testid="composer" />}
+          emptyState={<div>welcome</div>}
+        />,
+      );
+      const layout = screen.getByTestId("thread-welcome-layout");
+      expect(layout).not.toHaveAttribute("data-layout-transition");
+
+      rerender(
+        <ThreadViewport
+          messages={messages}
+          isStreaming={false}
+          composer={<textarea data-testid="composer" />}
+          emptyState={<div>welcome</div>}
+        />,
+      );
+      expect(layout).toHaveAttribute("data-layout-transition", "true");
+
+      act(() => vi.advanceTimersByTime(240));
+      expect(layout).not.toHaveAttribute("data-layout-transition");
+
+      rerender(
+        <ThreadViewport
+          messages={messages}
+          isStreaming={false}
+          composer={<textarea data-testid="composer" />}
+          emptyState={<div>welcome</div>}
+        />,
+      );
+      expect(layout).not.toHaveAttribute("data-layout-transition");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("separates the mobile welcome copy and composer into responsive rows", () => {

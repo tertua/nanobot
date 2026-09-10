@@ -414,6 +414,8 @@
   .thread-layout {
     --thread-composer-fade-height: 2.25rem;
     grid-template-rows: minmax(min-content, 1fr) auto 0fr;
+  }
+  .thread-layout[data-layout-transition="true"] {
     transition: grid-template-rows 220ms ease-out;
   }
   .thread-layout[data-layout="thread"] {
