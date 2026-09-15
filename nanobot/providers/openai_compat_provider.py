@@ -451,7 +451,7 @@ def _merge_unique_list(base: object, override: object) -> object:
         *cast(list[object], override),
     ]:
         try:
-            key = json.dumps(value, sort_keys=True, ensure_ascii=True)
+            key = json.dumps(value, sort_keys=True, ensure_ascii=False)
         except Exception:
             key = repr(value)
         if key in seen:
@@ -692,7 +692,7 @@ class OpenAICompatProvider(LLMProvider):
         if isinstance(text, str) and text:
             return text
         try:
-            dumped = json.dumps(content, ensure_ascii=True)
+            dumped = json.dumps(content, ensure_ascii=False)
         except Exception:
             dumped = str(content)
         return dumped or "(empty)"
@@ -785,10 +785,6 @@ class OpenAICompatProvider(LLMProvider):
                         tc_clean["function"] = function_clean
                     normalized.append(tc_clean)
                 clean["tool_calls"] = normalized
-                if clean.get("role") == "assistant":
-                    # Some OpenAI-compatible gateways reject assistant messages
-                    # that mix non-empty content with tool_calls.
-                    clean["content"] = None
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_tool_result_id(clean["tool_call_id"])
             if (
@@ -1376,8 +1372,11 @@ class OpenAICompatProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
     ) -> Any:
         """Retry Responses once without server compaction on compatibility errors."""
+        request_options = (
+            {"timeout": resolve_stream_idle_timeout_s()} if body.get("stream") else {}
+        )
         try:
-            return await client.responses.create(**body, extra_headers=extra_headers)
+            return await client.responses.create(**body, extra_headers=extra_headers, **request_options)
         except Exception as exc:
             if (
                 "context_management" not in body
@@ -1391,7 +1390,7 @@ class OpenAICompatProvider(LLMProvider):
                 "(status={})",
                 getattr(exc, "status_code", None),
             )
-            return await client.responses.create(**body, extra_headers=extra_headers)
+            return await client.responses.create(**body, extra_headers=extra_headers, **request_options)
 
     # ------------------------------------------------------------------
     # Response parsing
@@ -1909,7 +1908,11 @@ class OpenAICompatProvider(LLMProvider):
         body_text = body if isinstance(body, str) else str(body) if body is not None else ""
         safe_body = body_text.encode("utf-8", errors="replace").decode("utf-8")
         safe_exc = str(e).encode("utf-8", errors="replace").decode("utf-8")
-        msg = f"Error: {safe_body.strip()[:500]}" if safe_body.strip() else f"Error calling LLM: {safe_exc}"
+        msg = (
+            f"Error: {safe_body.strip()[:500]}"
+            if safe_body.strip()
+            else f"Error calling LLM: {safe_exc}"
+        )
 
         text = f"{body_text} {e}".lower()
         if spec and spec.is_local and ("502" in text or "connection" in text or "refused" in text):
@@ -2125,12 +2128,14 @@ class OpenAICompatProvider(LLMProvider):
                 # can surface live file-edit progress.
                 kwargs.setdefault("extra_body", {})["tool_stream"] = True
             kwargs["stream"] = True
+            kwargs["timeout"] = idle_timeout_s
             kwargs["stream_options"] = {"include_usage": True}
             chat_stream = cast(
                 Any,
                 await client.chat.completions.create(**kwargs),
             )
             chunks: list[Any] = []
+            completed = False
             stream_iter: AsyncIterator[Any] = chat_stream.__aiter__()
             while True:
                 try:
@@ -2142,6 +2147,7 @@ class OpenAICompatProvider(LLMProvider):
                     break
                 chunks.append(chunk)
                 if chunk.choices:
+                    completed |= bool(chunk.choices[0].finish_reason)
                     delta_obj = chunk.choices[0].delta
                     raw_delta_content = getattr(delta_obj, "content", None)
                     if on_content_delta:
@@ -2185,6 +2191,8 @@ class OpenAICompatProvider(LLMProvider):
                                 "name": str(_get(function_call, "name") or ""),
                                 "arguments_delta": str(_get(function_call, "arguments") or ""),
                             })
+            if not completed:
+                raise ConnectionError("Model stream ended before a finish reason was received")
             return self._parse_chunks(chunks)
         except asyncio.TimeoutError:
             return LLMResponse(

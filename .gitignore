@@ -103,4 +103,5 @@ temp/
 exp/
 .playwright-mcp/
 bridge/node_modules/
-webui/bun.lock
+webui/.verify-*
+.playwright-cli/

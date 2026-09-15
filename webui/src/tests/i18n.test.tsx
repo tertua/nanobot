@@ -159,7 +159,6 @@ const LOCALIZED_SETTINGS_COPY_KEYS = [
   "settings.sections.about",
   "settings.rows.theme",
   "settings.rows.language",
-  "settings.rows.density",
   "settings.rows.activityMode",
   "settings.rows.fileEditDisplay",
   "settings.rows.codeWrap",
@@ -171,7 +170,6 @@ const LOCALIZED_SETTINGS_COPY_KEYS = [
   "settings.rows.contextWindow",
   "settings.help.theme",
   "settings.help.language",
-  "settings.help.density",
   "settings.help.activityMode",
   "settings.help.fileEditDisplay",
   "settings.help.codeWrap",
@@ -182,8 +180,6 @@ const LOCALIZED_SETTINGS_COPY_KEYS = [
   "settings.help.webuiDefaultAccess",
   "settings.values.light",
   "settings.values.dark",
-  "settings.values.comfortable",
-  "settings.values.compact",
   "settings.values.expanded",
   "settings.values.enabled",
   "settings.values.disabled",
@@ -232,7 +228,6 @@ const LOCALIZED_CHANNEL_SHELL_KEYS = [
   "settings.channels.instanceConfigured",
   "settings.channels.instanceNeedsSetup",
   "settings.channels.managedByWebui",
-  "settings.channels.officialGuide",
   "settings.channels.optional",
   "settings.channels.providerPreset",
   "settings.channels.requiredSetup",
@@ -241,11 +236,9 @@ const LOCALIZED_CHANNEL_SHELL_KEYS = [
   "settings.channels.savedSettings",
   "settings.channels.saveSettings",
   "settings.channels.selectChannel",
-  "settings.channels.setupSteps",
   "settings.channels.showSecret",
   "settings.channels.toggleChannel",
   "settings.channels.toggleInstance",
-  "settings.channels.tryIt",
   "settings.channels.validation.connected",
   "settings.channels.validation.configured",
   "settings.channels.validation.invalid",
@@ -459,7 +452,7 @@ describe("webui i18n", () => {
     }
   });
 
-  it.skip("normalizes Portuguese locales before the app bundle loads", () => {
+  it("normalizes Portuguese locales before the app bundle loads", () => {
     const expected = resources["pt-BR"].common.app;
 
     for (const locale of ["pt", "pt-PT"]) {
@@ -471,7 +464,7 @@ describe("webui i18n", () => {
     }
   });
 
-  it.skip("defaults to English until the user chooses another language", () => {
+  it("defaults to English until the user chooses another language", () => {
     localStorage.removeItem(LOCALE_STORAGE_KEY);
     expect(resolveInitialLocale()).toBe("en");
 
@@ -479,7 +472,18 @@ describe("webui i18n", () => {
     expect(resolveInitialLocale()).toBe("zh-CN");
   });
 
-  it.skip("switches UI copy and document locale through the language switcher", async () => {
+  it("lists each language by its native name", async () => {
+    const user = userEvent.setup();
+
+    render(<LanguageSwitcher />);
+    await user.click(screen.getByRole("combobox", { name: "Change language" }));
+
+    for (const { nativeLabel } of supportedLocales) {
+      expect(screen.getByRole("option", { name: nativeLabel })).toBeInTheDocument();
+    }
+  });
+
+  it("switches UI copy and document locale through the language switcher", async () => {
     const user = userEvent.setup();
 
     render(
@@ -494,8 +498,8 @@ describe("webui i18n", () => {
     ).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("en");
 
-    await user.click(screen.getByRole("button", { name: "Change language" }));
-    await user.click(screen.getByRole("menuitemradio", { name: /简体中文/i }));
+    await user.click(screen.getByRole("combobox", { name: "Change language" }));
+    await user.click(screen.getByRole("option", { name: /简体中文/i }));
 
     await waitFor(() => {
       expect(document.documentElement.lang).toBe("zh-CN");
@@ -504,7 +508,7 @@ describe("webui i18n", () => {
     expect(screen.getByPlaceholderText("输入消息…")).toBeInTheDocument();
   });
 
-  it.skip("updates the composer aria label when the language changes", async () => {
+  it("updates the composer aria label when the language changes", async () => {
     render(<ThreadComposer onSend={vi.fn()} />);
 
     await act(async () => {
@@ -515,7 +519,7 @@ describe("webui i18n", () => {
     expect(screen.getByLabelText("メッセージ入力欄")).toBeInTheDocument();
   });
 
-  it.skip("localizes a backend-provided compact slash command", async () => {
+  it("localizes a backend-provided compact slash command", async () => {
     await act(async () => {
       const { setAppLanguage } = await import("@/i18n");
       await setAppLanguage("zh-CN");
@@ -652,7 +656,7 @@ describe("webui i18n", () => {
     }
   });
 
-  it.skip("keeps Simplified Chinese settings overview copy localized", () => {
+  it("keeps Simplified Chinese settings overview copy localized", () => {
     const settings = resources["zh-CN"].common.settings;
 
     expect(settings.nav.browser).toBe("网络");
@@ -668,7 +672,7 @@ describe("webui i18n", () => {
     expect(settings.skills.marketplaceTrendingTitle).toBe("各市场热门技能");
   });
 
-  it.skip("keeps the Simplified Chinese group workflow localized", () => {
+  it("keeps the Simplified Chinese group workflow localized", () => {
     const workbench = resources["zh-CN"].common.workbench;
 
     expect(workbench.tabAria).toBe("分组：{{title}}");
@@ -680,7 +684,7 @@ describe("webui i18n", () => {
     expect(workbench.detachPane).toBe("移出");
   });
 
-  it.skip("keeps Indonesian and Vietnamese settings free of copied Spanish help text", () => {
+  it("keeps Indonesian and Vietnamese settings free of copied Spanish help text", () => {
     const spanish = flattenResource(resources.es.common);
 
     for (const locale of ["id", "vi"] as const) {
@@ -692,7 +696,7 @@ describe("webui i18n", () => {
     }
   });
 
-  it.skip("keeps Brazilian Portuguese settings overview copy localized", () => {
+  it("keeps Brazilian Portuguese settings overview copy localized", () => {
     const settings = resources["pt-BR"].common.settings;
     const sidebar = resources["pt-BR"].common.sidebar;
     const chat = resources["pt-BR"].common.chat;

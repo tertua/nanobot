@@ -23,6 +23,7 @@ if sys.platform == "win32":
 # Keep console encoding setup before importing CLI UI/logging libraries.
 import typer  # noqa: E402
 from loguru import logger  # noqa: E402
+from typer.core import TyperGroup  # noqa: E402
 
 # Remove default handler and re-add with unified nanobot format
 logger.remove()
@@ -55,7 +56,7 @@ from nanobot.cli import terminal as cli_terminal  # noqa: E402
 from nanobot.cli.agent import agent  # noqa: E402
 from nanobot.cli.gateway import create_gateway_app  # noqa: E402
 from nanobot.cli.gateway_runtime import _run_gateway  # noqa: E402
-from nanobot.cli.log_control import _set_nanobot_logs, setup_logging  # noqa: E402
+from nanobot.cli.log_control import _set_nanobot_logs  # noqa: E402
 from nanobot.cli.process_identity import set_cli_process_identity  # noqa: E402
 from nanobot.cli.provider import provider_app  # noqa: E402
 from nanobot.cli.runtime_config import (  # noqa: E402
@@ -83,11 +84,25 @@ from nanobot.utils.helpers import (  # noqa: E402
 SafeFileHistory = cli_terminal.SafeFileHistory
 
 
+class _DesktopAwareGroup(TyperGroup):
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
+        # Keep exact arguments: explicitly passing even a default-valued option
+        # must bypass the picker. Also covers older commands:app launchers.
+        ctx.meta["desktop_target_args"] = list(args)
+        return super().parse_args(ctx, args)
+
+
 app = typer.Typer(
+    cls=_DesktopAwareGroup,
     name="nanobot",
     context_settings={"help_option_names": ["-h", "--help"]},
     help=f"{__logo__} nanobot - Personal AI Assistant",
-    no_args_is_help=True,
+    epilog=(
+        "Run `nanobot` without a subcommand to start the terminal agent. "
+        "Use `nanobot agent --help` for agent options."
+    ),
+    invoke_without_command=True,
+    no_args_is_help=False,
 )
 
 console = Console()
@@ -98,7 +113,7 @@ def version_callback(value: bool):
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
     version: bool = typer.Option(
@@ -110,7 +125,18 @@ def main(
     # imports this Typer app directly instead of ``nanobot.cli.entry``. Keep the
     # role identity correct until that launcher is regenerated.
     command = ctx.invoked_subcommand
-    set_cli_process_identity([command] if command else sys.argv[1:])
+    set_cli_process_identity([command] if command else ["agent"])
+    from nanobot.cli.desktop_target import dispatch_bare_desktop_target
+
+    raw_args = ctx.meta.get("desktop_target_args")
+    if isinstance(raw_args, list):
+        desktop_exit = dispatch_bare_desktop_target(cast(list[str], raw_args))
+        if desktop_exit is not None:
+            raise typer.Exit(desktop_exit)
+    if command is None:
+        from nanobot.cli.entry import _run_agent
+
+        _run_agent([], prog_name="nanobot")
 
 
 # ============================================================================
@@ -210,37 +236,23 @@ def onboard(
     if explicit_config:
         webui_cmd += f' -c "{config_path}"'
 
-    agent_cmd = 'nanobot agent -m "Hello!"'
-    gateway_cmd = "nanobot gateway"
-
-    console.print(f"\n{__logo__} nanobot is ready!")
-    console.print("\nNext steps:")
-    if wizard:
-        console.print(f"  1. Chat: [cyan]{agent_cmd}[/cyan]")
-        console.print(f"  2. Start gateway: [cyan]{gateway_cmd}[/cyan]")
-    else:
-        console.print(f"  1. Add your API key to [cyan]{config_path}[/cyan]")
-        console.print("     Get one at: https://build.nvidia.com/settings/api-keys")
-        console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
+    typer.echo(f"\n✓ nanobot is ready. Run: {webui_cmd}")
 
 
 def _onboard_plugins(config_path: Path) -> None:
     """Inject default config for all discovered channels (built-in + plugins)."""
+    import json
+
     from nanobot.channels.contracts import channel_default_config
     from nanobot.channels.registry import discover_plugins
-    from nanobot.config.loader import (
-        load_config,
-        merge_missing_defaults,
-        save_config,
-    )
-    from nanobot.config.schema import Config
+    from nanobot.config.loader import merge_missing_defaults
 
     plugins = discover_plugins()
     if not plugins:
         return
 
-    config = load_config(config_path)
-    data = config.model_dump(mode="json", by_alias=True)
+    with open(config_path, encoding="utf-8") as f:
+        data = json.load(f)
 
     channels = data.setdefault("channels", {})
     for name, plugin in plugins.items():
@@ -250,10 +262,8 @@ def _onboard_plugins(config_path: Path) -> None:
         else:
             channels[name] = merge_missing_defaults(channels[name], defaults)
 
-    # Re-parse agar melalui validator, lalu save via save_config()
-    # sehingga _CHANNEL_WHITELIST di loader.py tetap diterapkan
-    config = Config.model_validate(data)
-    save_config(config, config_path)
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def _print_enable_options(
@@ -358,7 +368,7 @@ def serve(
     from nanobot.providers.image_generation import image_gen_provider_configs
     from nanobot.session.manager import SessionManager
 
-    setup_logging(verbose=verbose)
+    _set_nanobot_logs(verbose)
 
     runtime_config = _load_runtime_config(config, workspace)
     api_cfg = runtime_config.api

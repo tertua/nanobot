@@ -35,6 +35,7 @@ import {
   type ConnectionStatusInfo,
   type FileEditEvent,
   type GatewayApiConnection,
+  type GatewayConnection,
   type HistoryMessage,
   type InboundEvent,
   type MentionCandidate,
@@ -100,6 +101,8 @@ import {
 import { configureOpenTuiEnvironment, createTuiHost, type TuiHost } from "./host"
 
 interface AppOptions {
+  resolveConnection?: () => Promise<GatewayConnection>
+  desktopGatewayId?: string
   wsUrl?: string
   bootstrapUrl?: string
   bootstrapSecret?: string
@@ -588,7 +591,7 @@ export class NanobotTui {
     this.defaultModelPreset = options.modelPreset
     this.modelName = options.model
     this.modelPreset = options.modelPreset
-    this.apiReauthenticator = options.bootstrapUrl
+    this.apiReauthenticator = options.bootstrapUrl || options.resolveConnection
       ? (rejectedApiToken) => this.refreshApiConnection(rejectedApiToken)
       : undefined
     this.sessionModelPreset = options.chatId ? undefined : null
@@ -631,7 +634,13 @@ export class NanobotTui {
       },
     )
     this.client = client || new NanobotClient({
-      ...(options.bootstrapUrl
+      ...(options.resolveConnection ? {
+        resolveConnection: options.resolveConnection,
+        onConnection: (connection: GatewayConnection) => this.useGatewayConnection(connection.apiUrl, connection.apiToken),
+        expectedGatewayId: options.desktopGatewayId,
+        reconnect: false,
+        targetEndpoint: "Nanobot Desktop",
+      } : options.bootstrapUrl
         ? {
             resolveConnection: () => fetchGatewayConnection(
               options.bootstrapUrl || "",
@@ -652,7 +661,7 @@ export class NanobotTui {
           }
         : { url: options.wsUrl }),
       chatId: options.chatId,
-      initialWorkspaceScope: {
+      initialWorkspaceScope: options.desktopGatewayId ? undefined : {
         project_path: options.workspace,
         access_mode: options.access.toLocaleLowerCase().includes("full") ? "full" : "restricted",
       },
@@ -1463,12 +1472,12 @@ export class NanobotTui {
       return { apiUrl: this.options.apiUrl, apiToken: this.options.apiToken }
     }
     if (this.apiRefreshPromise) return this.apiRefreshPromise
-    const refresh = fetchGatewayConnection(
+    const refresh = (this.options.resolveConnection ? this.options.resolveConnection() : fetchGatewayConnection(
       this.options.bootstrapUrl || "",
       this.options.bootstrapSecret || "",
       this.options.apiUrl,
       `tui-${process.pid}`,
-    ).then((connection) => {
+    )).then((connection) => {
       this.updateGatewayApiConnection(connection.apiUrl, connection.apiToken)
       return connection
     })
@@ -1489,6 +1498,9 @@ export class NanobotTui {
     // accurate user-facing state unless the protocol supplied connection diagnostics.
     if (status === "error" && !info) return
     this.connectionMessage = connectionStatusText(status, info)
+    if (this.options.desktopGatewayId && status === "error") {
+      this.connectionMessage = "Desktop disconnected or incompatible · exit and run nanobot to reconnect"
+    }
     if (status === "connected") {
       this.ready = false
       this.renderConnectionMessage()
