@@ -60,6 +60,8 @@ coverage.xml
 # Lock files (project policy)
 poetry.lock
 uv.lock
+webui/bun.lock
+webui/package-lock.json
 
 # Jupyter
 .ipynb_checkpoints/

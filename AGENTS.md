@@ -38,7 +38,7 @@ bun run build               # writes to ../nanobot/web/dist
 bunx vitest run             # tests
 ```
 
-**WebUI test baseline**: 4 failures are pre-existing/flaky (app-layout ×2 timeouts, thread-composer "compact context meter", thread-shell "reset lineage") — they fail on pure upstream too. Don't chase them; a regression is any failure beyond these four. Several other tests are `it.skip`ped because they expect locales this fork removed.
+**WebUI test baseline**: the fork commits no lockfiles, so `bun install` resolves floating versions (upstream pins `webui/bun.lock`). Under those conditions upstream itself fails ~19 tests; the fork fails fewer (~12) because it has fewer tests — app-layout timeouts, thread-composer "compact context meter", settings-models picker focus, composer-usage-popover Escape, code-block, message-links-menu, settings-channels, temporary-chat-navigation, image-gallery, copilot-device-login. Don't chase them; a regression is any failure that does *not* also reproduce on `upstream/main` installed the same way (no lockfile). Several other tests are `it.skip`ped because they expect locales this fork removed.
 
 ## Architecture
 
